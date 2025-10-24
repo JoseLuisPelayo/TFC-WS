@@ -47,7 +47,7 @@ public class LifeCycleLogs {
      * <p>Formato del log: {@code app_stopped app_name={}}
      */
     @EventListener(ContextClosedEvent.class)
-    public void onContextClosed(ContextClosedEvent event) {
+    public void onContextClosed() {
         log.info("app_stopped app_name={}", System.getProperty("spring.application.name", "app"));
     }
 }
