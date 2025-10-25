@@ -2,8 +2,8 @@ package org.jpsoft.tfcws.domain.world;
 
 import org.jpsoft.tfcws.domain.spatial.Position;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Utilidades geométricas para calcular coordenadas de chunks y seleccionar
@@ -44,14 +44,14 @@ public final class ChunkGeometry {
      * <p>El AOI se interpreta como un radio en número de chunks definido por
      * {@code WorldConstants.AOI}. Se recorren los índices X desde
      * {@code center.cx() - AOI} hasta {@code center.cx() + AOI} y, para cada X,
-     * los índices Y en el mismo rango. El resultado es una lista con todos los chunks
+     * los índices Y en el mismo rango. El resultado es un Set con todos los chunks
      * que entran en el área de interes.</p>
      *
      * @param center coordenada de chunk que actúa como centro del AOI
-     * @return lista de {@code ChunkCoord} dentro del AOI
+     * @return HashSet de {@code ChunkCoord} dentro del AOI
      */
-    public static List<ChunkCoord> getChunksInAOI(ChunkCoord center) {
-        List<ChunkCoord> chunks = new ArrayList<>();
+    public static Set<ChunkCoord> getChunksInAOI(ChunkCoord center) {
+        Set<ChunkCoord> chunks = new HashSet<>();
         int startX = center.cx() - WorldConstants.AOI;
         int endX = center.cx() + WorldConstants.AOI;
         int startY = center.cy() - WorldConstants.AOI;
