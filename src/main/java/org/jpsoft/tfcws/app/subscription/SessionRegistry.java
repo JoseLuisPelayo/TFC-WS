@@ -25,7 +25,7 @@ import java.util.Set;
  * @since 1.0
  */
 public interface SessionRegistry {
-    void addSessionToZone(String sessionId, Set<ChunkCoord> zones);
+    void addSessionsToZones(String sessionId, Set<ChunkCoord> zones);
     void removeSession(String sessionId);
     Set<ChunkCoord> getZonesBySessionId(String sessionId);
     Set<String> getSessionsByZone(ChunkCoord zone);
