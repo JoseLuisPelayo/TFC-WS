@@ -2,8 +2,11 @@ package org.jpsoft.tfcws.infra.memory;
 
 import org.jpsoft.tfcws.app.subscription.SessionRegistry;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -51,6 +54,8 @@ import java.util.concurrent.locks.ReentrantLock;
      */
 @Component
 public class InMemoryRegistry implements SessionRegistry {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryRegistry.class);
 
     /**
      * Vista: zona -> sesiones.
@@ -102,7 +107,7 @@ public class InMemoryRegistry implements SessionRegistry {
     public void addSessionsToZones(String sessionId, Set<ChunkCoord> zones) {
 
         if (sessionId == null || sessionId.isBlank()) throw new IllegalArgumentException("sessionId is null");
-        if (containsZones(zones)) throw new IllegalArgumentException("zones is null/empty");
+        if (!containsZones(zones)) throw new IllegalArgumentException("zones is null/empty");
 
         // Región crítica por sesión: garantiza que las dos vistas se actualizan juntas (semántica "atómica" a nivel lógico).
         ReentrantLock lock = lockFor(sessionId);
@@ -120,6 +125,9 @@ public class InMemoryRegistry implements SessionRegistry {
             }
 
             zonesBySessions.put(sessionId, chunks);
+
+            List<String> zoneKeys = chunks.stream().map(ChunkCoord::getZoneKey).toList();
+            log.info("event=session_subscribed sessionId={} zones={}", sessionId, zoneKeys);
         } finally {
             lock.unlock();
         }
@@ -166,6 +174,8 @@ public class InMemoryRegistry implements SessionRegistry {
                     }
                 });
             }
+            zonesBySessions.put(sessionId, zones);
+            log.info("event=session_unsubscribed sessionId={} zones={}", sessionId, zones);
         } finally {
             lock.unlock();
         }
