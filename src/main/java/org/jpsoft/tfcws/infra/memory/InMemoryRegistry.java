@@ -174,8 +174,8 @@ public class InMemoryRegistry implements SessionRegistry {
                     }
                 });
             }
-            zonesBySessions.put(sessionId, zones);
-            log.info("event=session_unsubscribed sessionId={} zones={}", sessionId, zones);
+//            zonesBySessions.put(sessionId, zones);
+            log.info("event=session_unsubscribed sessionId={} zones={}", sessionId, (zones == null ) ? Set.of() : zones);
         } finally {
             lock.unlock();
         }
