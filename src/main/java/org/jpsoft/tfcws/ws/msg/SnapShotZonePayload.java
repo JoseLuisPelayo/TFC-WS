@@ -1,17 +1,18 @@
 package org.jpsoft.tfcws.ws.msg;
 
+import java.util.List;
+
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.jpsoft.tfcws.domain.world.ChunkCoord;
 
-import java.util.Set;
 
 @Getter
 @Setter
 @AllArgsConstructor
 @NoArgsConstructor
-public class SubscribedPayload {
-    Set<ChunkCoord> subscribedChunks;
+public class SnapShotZonePayload {
+    private String zoneId;
+    private List<PlayerViewPayload> players;
 }
