@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.ws.msg;
+package org.jpsoft.tfcws.ws.msg.error;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -9,8 +9,7 @@ import lombok.Setter;
 @Setter
 @AllArgsConstructor
 @NoArgsConstructor
-public class PlayerMovedAckPayload {
-    private double x;
-    private double y;
-    private String chunk;
+public class ErrorPayload {
+    private String code;
+    private String message;
 }

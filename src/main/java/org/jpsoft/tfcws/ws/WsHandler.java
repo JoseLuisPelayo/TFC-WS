@@ -1,11 +1,20 @@
 package org.jpsoft.tfcws.ws;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.jpsoft.tfcws.app.subscription.SessionRegistry;
+import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
+import org.jpsoft.tfcws.domain.world.ChunkGeometry;
 import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.jpsoft.tfcws.ws.codec.MsgCodec;
+import org.jpsoft.tfcws.ws.msg.Envelope;
+import org.jpsoft.tfcws.ws.msg.PlayerMovePayload;
+import org.jpsoft.tfcws.ws.msg.PlayerMovedAckPayload;
+import org.jpsoft.tfcws.ws.msg.error.ErrorCode;
+import org.jpsoft.tfcws.ws.msg.error.ErrorPayload;
+import org.jpsoft.tfcws.ws.msg.MsgType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketMessage;
@@ -13,6 +22,7 @@ import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Set;
 
@@ -36,11 +46,10 @@ import java.util.Set;
  *       para que tanto la lógica de conexión como la terminación puedan consumirla.</li>
  * </ul>
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class WsHandler implements WebSocketHandler {
-
-    private static final Logger logger = LoggerFactory.getLogger(WsHandler.class);
 
     /**
      * Registro de sesiones: se usa para limpiar/gestionar suscripciones y datos asociados
@@ -60,6 +69,8 @@ public class WsHandler implements WebSocketHandler {
      * que la lógica de conexión lea mensajes iniciales del cliente si es necesario.
      */
     private final OnConnectFlow connectFlow;
+
+    private final MsgCodec codec;
 
     /**
      * Maneja una conexión WebSocket.
@@ -93,22 +104,88 @@ public class WsHandler implements WebSocketHandler {
     @Override
     public Mono<Void> handle(WebSocketSession session) {
         String id = session.getId();
+
         String address = String.valueOf(session.getHandshakeInfo().getRemoteAddress());
-        // Fuente de mensajes recibidos desde el cliente. Se publica y se auto-connecta con 2
-        // para compartir la misma fuente entre connectFlow y la espera de terminación
-        Flux<WebSocketMessage> inbound = session.receive()
-                .publish().autoConnect(2);
+
+        // Inbound: convertimos cada mensaje WebSocket a texto y lo compartimos para múltiples consumidores.
+        Flux<String> inboundText = session.receive()
+                .map(WebSocketMessage::getPayloadAsText)
+                .share();
+
+        /*
+         * Bus: parseamos cada texto a Envelope. En caso de tener JSON inválido generamos
+         * un envelope de error para que la capa superior pueda notificar al cliente.
+         * Compartimos el stream para reutilizar la misma fuente en distintos subsistemas.
+         */
+        Flux<Envelope> bus = inboundText
+                .flatMap(text -> Mono.fromCallable(() -> codec.parseEnvelope(text))
+                        .onErrorResume(e -> {
+                            try {
+                                return Mono.just(
+                                        codec.parseEnvelope(
+                                                codec.encode(
+                                                MsgType.ERROR,
+                                                new ErrorPayload(ErrorCode.BAD_JSON.name(), ErrorCode.BAD_JSON.defaultMessage())
+                                        )));
+                            } catch (IOException ex) {
+                                throw new RuntimeException(ex);
+                            }
+                        }))
+                .share();
+
         // Ejecuta la lógica de conexión que puede producir un mensaje inicial (o vaciarse).
-        Flux<WebSocketMessage> connectMessage = connectFlow.run(session, inbound);
+        Flux<WebSocketMessage> connectMessage = connectFlow.run(session, bus);
+
+        /*
+         * Movimiento: cada Envelope de tipo MOVE se transforma en un ack enviado al cliente.
+         * Si la sesión no pertenece a ninguna zona se responde con un error NOT_JOINED.
+         * También usamos esta ruta para actualizar la presencia antes de enviar el echo.
+         */
+        Flux<WebSocketMessage> movementEcho = bus
+                .filter(env -> env.getType() == MsgType.MOVE)
+                .flatMap(
+                        env -> {
+                            try {
+                                if (sessionRegistry.getZonesBySessionId(id).isEmpty()) {
+                                    // La sesión no ha entrado en ninguna zona, mandamos error.
+                                    return Mono.just(session.textMessage(
+                                            codec.encode(MsgType.ERROR,
+                                                    new ErrorPayload(ErrorCode.NOT_JOINED.name(), ErrorCode.NOT_JOINED.defaultMessage()))
+                                    ));
+                                }
+
+                                PlayerMovePayload move = codec.parsePayload(env, PlayerMovePayload.class);
+                                presence.upsertPresence(id, new Position(move.getX(), move.getY()), sessionRegistry.getZonesBySessionId(id));
+                                // Echo del movimiento: convertimos la posición a chunk y devolvemos el ack.
+                                ChunkCoord chunkCoord = ChunkGeometry.posToChunk(new Position(move.getX(), move.getY()));
+
+                                return Mono.just(session.textMessage(
+                                        codec.encode(MsgType.MOVED,
+                                                new PlayerMovedAckPayload(move.getX(), move.getY(), chunkCoord.getZoneKey())))
+                                );
+
+
+                            } catch (JsonProcessingException e) {
+                                // Falla el parseo del payload MOVE, respondemos con BAD_MOVE.
+                                String json = codec.encode(MsgType.ERROR, new ErrorPayload("BAD_MOVE", e.getMessage()));
+                                return Mono.just(session.textMessage(json));
+                            }
+                        }
+                );
+
         // Latido periódico: genera mensajes de tipo ping cada 30 segundos para mantener la conexión.
         Flux<WebSocketMessage> heartbeat = Flux.interval(Duration.ofSeconds(30))
                 .map(tick -> session.pingMessage(buf -> buf.wrap(new byte[0])));
-        // Outbound = primero el mensaje de conexión (si existe) y después los pings periódicos.
-        Flux<WebSocketMessage> outbound = Flux.concat(connectMessage, heartbeat);
+
+        // Outbound: concatenamos el mensaje de conexión inicial, los echos y los pings de heartbeat.
+        Flux<WebSocketMessage> outbound = Flux.concat(connectMessage, movementEcho, heartbeat);
+
+
+
         // Envía el outbound y espera la finalización del inbound.
         // En doFinally se realiza la limpieza del registro de sesiones y el log.
         return session.send(outbound)
-                .and(inbound.then())
+                .and(inboundText.then())
                 .doFinally(s -> {
 
                     String sessionId = session.getId();
@@ -118,7 +195,7 @@ public class WsHandler implements WebSocketHandler {
                     }
                     sessionRegistry.removeSession(session.getId());
 
-                    logger.info("WebSocket session ended: id={}, address={}", id, address);
+                    log.info("WebSocket session ended: id={}, address={}", id, address);
                 });
 
     }

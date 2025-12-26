@@ -9,8 +9,7 @@ import lombok.Setter;
 @Setter
 @AllArgsConstructor
 @NoArgsConstructor
-public class PlayerMovedAckPayload {
-    private double x;
-    private double y;
-    private String chunk;
+public class JoinPayload {
+    private Double x;
+    private Double y;
 }
