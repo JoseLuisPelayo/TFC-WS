@@ -23,16 +23,24 @@ public class MsgCodec {
         return mapper.readValue(json, Envelope.class);
     }
 
-    public String encodeSnapShotZone(SnapShotZonePayload payload) {
+    public <T> T parsePayload(Envelope envelope, Class<T> payloadClass) throws JsonProcessingException {
+            return mapper.treeToValue(envelope.getPayload(), payloadClass);
+    }
+
+    public String encode(MsgType type, Object payload) {
         ObjectNode root = mapper.createObjectNode();
-        root.put("type", MsgType.SNAPSHOT_ZONE.name());
+        root.put("type", type.name());
         root.set("payload", mapper.valueToTree(payload));
 
         try {
             return mapper.writeValueAsString(root);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Error encoding SnapShotZonePayload", e);
+            throw new RuntimeException("Error encoding payload of type: " + type, e);
         }
+    }
+
+    public String encodeSnapShotZone(SnapShotZonePayload payload) {
+        return encode(MsgType.SNAPSHOT_ZONE, payload);
     }
 
 
