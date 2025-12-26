@@ -3,6 +3,7 @@ package org.jpsoft.tfcws.app.subscription;
 import lombok.RequiredArgsConstructor;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
+import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
 import org.springframework.stereotype.Service;
 
 import java.util.Set;
@@ -32,6 +33,11 @@ public class SubscriptionService {
      * Servicio encargado de calcular las claves de zona AOI a partir de una posición.
      */
     private final AoiService aoiService;
+    /**
+     * Gestor de presencia en memoria. Responsable de mantener la posición y zonas
+     * asociadas a cada sesión.
+     */
+    private final InMemoryPresence presence;
 
     /**
      * Suscribe una sesión a las zonas iniciales calculadas para la posición indicada.
@@ -47,7 +53,7 @@ public class SubscriptionService {
      * @param position posición del usuario/jugador que determina las zonas AOI
      * @return conjunto de claves de zona (tipo {@code String}) a las que la sesión ha sido añadida
      */
-    public Set<String> suscribeInitialZones(String sessionId, Position position) {
+    public Set<ChunkCoord> suscribeInitialZones(String sessionId, Position position) {
         if (sessionId == null || sessionId.isEmpty())
             throw new IllegalArgumentException("sessionId cannot be null or empty");
         if (position == null)
@@ -55,10 +61,9 @@ public class SubscriptionService {
 
         Set<ChunkCoord> zones = aoiService.getAoiZoneKeys(position);
         sessionRegistry.addSessionsToZones(sessionId, zones);
+        presence.upsertPresence(sessionId, position, zones);
 
-        return zones.stream()
-                .map(ChunkCoord::getZoneKey)
-                .collect(Collectors.toSet());
+        return zones;
     }
 
 }
