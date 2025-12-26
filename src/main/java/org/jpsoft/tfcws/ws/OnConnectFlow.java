@@ -9,6 +9,9 @@ import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import org.jpsoft.tfcws.app.subscription.SubscriptionService;
 import org.jpsoft.tfcws.domain.spatial.Position;
+import org.jpsoft.tfcws.domain.world.ChunkCoord;
+import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
+import org.jpsoft.tfcws.ws.codec.MsgCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -36,7 +39,7 @@ import java.util.Set;
  *   <li>En caso de error o timeout en el mensaje "join", usar una posición por defecto (0,0)
  *       y continuar con la suscripción.</li>
  * </ul>
- *
+ * <p>
  * Diseño y notas:
  * <ul>
  *   <li>Esta clase delega la lógica concreta de suscripción a {@link SubscriptionService}.</li>
@@ -50,10 +53,22 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class OnConnectFlow {
 
-    /** Servicio encargado de gestionar las suscripciones a zonas. */
+    /**
+     * Servicio encargado de gestionar las suscripciones a zonas.
+     */
     private final SubscriptionService subscriptionService;
+    /**
+     * Gestor de presencia en memoria.
+     */
+    private final InMemoryPresence presence;
+    /**
+     * Codec para convertir objetos a mensajes WebSocket.
+     */
+    private final MsgCodec codec;
 
-    /** Mapper JSON usado para parsear y crear mensajes JSON de salida. */
+    /**
+     * Mapper JSON usado para parsear y crear mensajes JSON de salida.
+     */
     private final ObjectMapper objectMapper;
 
     private static final Logger log = LoggerFactory.getLogger(OnConnectFlow.class);
@@ -98,13 +113,13 @@ public class OnConnectFlow {
      * @param inbound flujo de mensajes entrantes desde el cliente
      * @return un {@link Mono} que emite un {@link WebSocketMessage} con la confirmación de suscripción
      */
-    public Mono<WebSocketMessage> run(WebSocketSession session, Flux<WebSocketMessage> inbound) {
+    public Flux<WebSocketMessage> run(WebSocketSession session, Flux<WebSocketMessage> inbound) {
         final String sessionId = session.getId();
         final InetSocketAddress remoteAddress = session.getHandshakeInfo().getRemoteAddress();
 
         // Primero: obtener el primer mensaje del cliente (si existe). Si tarda más de joinTimeout,
         // se considera timeout y se cae al onErrorResume.
-        Mono<Position> firstMessage = inbound.next().timeout(joinTimeout)
+        Mono<Position> positionMono = inbound.next().timeout(joinTimeout)
                 // map: convertir el WebSocketMessage en su payload textual
                 .map(WebSocketMessage::getPayloadAsText)
                 // flatMap: parsear el JSON de "join" a Position o devolver Mono.error si es inválido
@@ -122,10 +137,17 @@ public class OnConnectFlow {
                     return Mono.just(new Position(0.0, 0.0));
                 });
 
-        // Con la posición resultante, construir el mensaje de suscripción que será enviado
-        // de vuelta al cliente (ej. un JSON con type=SUBSCRIBED y payload.zones = [..]).
-        return firstMessage
-                .flatMap(pos -> buildSuscriptionMessage(session, pos));
+        Mono<Set<ChunkCoord>> zonesMono = positionMono.map(pos -> subscriptionService.suscribeInitialZones(sessionId, pos));
+
+
+        Flux<WebSocketMessage> snapshots = zonesMono.flatMapMany(
+                        zones -> Flux.fromIterable(presence.buildSnapShotZone(sessionId, zones)))
+                .map(codec::encodeSnapShotZone)
+                .map(session::textMessage);
+
+        Mono<WebSocketMessage> suscribedMessage = positionMono.flatMap(pos -> buildSuscriptionMessage(session, pos));
+        
+        return Flux.concat(suscribedMessage, snapshots);
     }
 
     //TODO Sacar los parsers a otra clase
@@ -203,15 +225,15 @@ public class OnConnectFlow {
      * <p>Si ocurre un {@link JsonProcessingException} al construir el JSON de respuesta,
      * se registra el error y se devuelve {@link Mono#empty()} (no se envía mensaje al cliente).
      *
-     * @param session sesión WebSocket (necesaria para crear el {@link WebSocketMessage})
+     * @param session  sesión WebSocket (necesaria para crear el {@link WebSocketMessage})
      * @param position posición del cliente usada para calcular las zonas iniciales
      * @return Mono que emite el {@link WebSocketMessage} listo para ser enviado, o Mono.empty()
-     *         si hubo un error al construir el JSON de salida
+     * si hubo un error al construir el JSON de salida
      */
     private Mono<WebSocketMessage> buildSuscriptionMessage(WebSocketSession session, Position position) {
         try {
             // Suscribe y recibe las keys (representación String) de los chunks/zones suscritos
-            Set<String> subscribedChunks = subscriptionService.suscribeInitialZones(session.getId(), position);
+            Set<ChunkCoord> subscribedChunks = subscriptionService.suscribeInitialZones(session.getId(), position);
 
             // Construcción del payload JSON: { payload: { zones: [...] } }
             ObjectNode payloadNode = objectMapper.createObjectNode();

@@ -2,6 +2,8 @@ package org.jpsoft.tfcws.ws;
 
 import lombok.RequiredArgsConstructor;
 import org.jpsoft.tfcws.app.subscription.SessionRegistry;
+import org.jpsoft.tfcws.domain.world.ChunkCoord;
+import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -12,6 +14,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.Set;
 
 /**
  * Controlador WebSocket reactivo basado en Spring WebFlux.
@@ -44,7 +47,11 @@ public class WsHandler implements WebSocketHandler {
      * cuando la sesión termina.
      */
     private final SessionRegistry sessionRegistry;
-
+    /**
+     * Gestor de presencia en memoria: puede ser usado por los flujos para actualizar
+     * la presencia de sesiones/jugadores.
+     */
+    private final InMemoryPresence presence;
     /**
      * Flujo que se ejecuta al establecer la conexión y que puede producir un mensaje
      * inicial (p. ej. validación, saludo, suscripciones iniciales).
@@ -87,30 +94,32 @@ public class WsHandler implements WebSocketHandler {
     public Mono<Void> handle(WebSocketSession session) {
         String id = session.getId();
         String address = String.valueOf(session.getHandshakeInfo().getRemoteAddress());
-
         // Fuente de mensajes recibidos desde el cliente. Se publica y se auto-connecta con 2
         // para compartir la misma fuente entre connectFlow y la espera de terminación
         Flux<WebSocketMessage> inbound = session.receive()
                 .publish().autoConnect(2);
-
         // Ejecuta la lógica de conexión que puede producir un mensaje inicial (o vaciarse).
-        Mono<WebSocketMessage> connectMessage = connectFlow.run(session, inbound);
-
+        Flux<WebSocketMessage> connectMessage = connectFlow.run(session, inbound);
         // Latido periódico: genera mensajes de tipo ping cada 30 segundos para mantener la conexión.
         Flux<WebSocketMessage> heartbeat = Flux.interval(Duration.ofSeconds(30))
                 .map(tick -> session.pingMessage(buf -> buf.wrap(new byte[0])));
-
         // Outbound = primero el mensaje de conexión (si existe) y después los pings periódicos.
         Flux<WebSocketMessage> outbound = Flux.concat(connectMessage, heartbeat);
-
         // Envía el outbound y espera la finalización del inbound.
         // En doFinally se realiza la limpieza del registro de sesiones y el log.
         return session.send(outbound)
                 .and(inbound.then())
-                .doFinally( s -> {
-            sessionRegistry.removeSession(session.getId());
-            logger.info("WebSocket session ended: id={}, address={}", id, address);
-        });
+                .doFinally(s -> {
+
+                    String sessionId = session.getId();
+                    Set<ChunkCoord> zones = sessionRegistry.getZonesBySessionId(sessionId);
+                    if (!zones.isEmpty()) {
+                        presence.removePresence(sessionId, zones);
+                    }
+                    sessionRegistry.removeSession(session.getId());
+
+                    logger.info("WebSocket session ended: id={}, address={}", id, address);
+                });
 
     }
 }
