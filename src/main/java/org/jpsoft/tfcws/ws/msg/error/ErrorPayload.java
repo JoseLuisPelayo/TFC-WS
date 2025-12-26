@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.ws.msg;
+package org.jpsoft.tfcws.ws.msg.error;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
