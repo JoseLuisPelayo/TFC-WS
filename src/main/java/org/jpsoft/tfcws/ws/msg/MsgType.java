@@ -6,5 +6,5 @@ public enum MsgType {
     SNAPSHOT_ZONE,
     ERROR,
     MOVE,
-    Moved
+    MOVED
 }
