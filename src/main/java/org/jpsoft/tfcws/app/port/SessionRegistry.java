@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.app.subscription;
+package org.jpsoft.tfcws.app.port;
 
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 

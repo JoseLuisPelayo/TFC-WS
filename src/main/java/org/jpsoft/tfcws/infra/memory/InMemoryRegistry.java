@@ -1,6 +1,6 @@
 package org.jpsoft.tfcws.infra.memory;
 
-import org.jpsoft.tfcws.app.subscription.SessionRegistry;
+import org.jpsoft.tfcws.app.port.SessionRegistry;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -174,7 +174,7 @@ public class InMemoryRegistry implements SessionRegistry {
                     }
                 });
             }
-//            zonesBySessions.put(sessionId, zones);
+
             log.info("event=session_unsubscribed sessionId={} zones={}", sessionId, (zones == null ) ? Set.of() : zones);
         } finally {
             lock.unlock();

@@ -1,14 +1,14 @@
-package org.jpsoft.tfcws.ws;
+package org.jpsoft.tfcws.adapter.ws;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.jpsoft.tfcws.app.subscription.SessionRegistry;
+import org.jpsoft.tfcws.app.port.SessionRegistry;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.domain.world.ChunkGeometry;
 import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
-import org.jpsoft.tfcws.ws.codec.MsgCodec;
+import org.jpsoft.tfcws.app.flow.OnConnectFlow;
 import org.jpsoft.tfcws.ws.msg.Envelope;
 import org.jpsoft.tfcws.ws.msg.PlayerMovePayload;
 import org.jpsoft.tfcws.ws.msg.PlayerMovedAckPayload;
