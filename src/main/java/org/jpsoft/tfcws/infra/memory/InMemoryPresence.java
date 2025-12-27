@@ -1,6 +1,7 @@
 package org.jpsoft.tfcws.infra.memory;
 
 import lombok.extern.slf4j.Slf4j;
+import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.domain.world.ChunkGeometry;
@@ -35,7 +36,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 @Component
-public class InMemoryPresence {
+public class InMemoryPresence implements Presence {
 
     /**
      * Mapa concurrente sessionId -> Position.

@@ -1,17 +1,14 @@
-package org.jpsoft.tfcws.ws;
+package org.jpsoft.tfcws.app.flow;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
+import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.app.subscription.SubscriptionService;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
-import org.jpsoft.tfcws.ws.codec.MsgCodec;
+import org.jpsoft.tfcws.adapter.ws.MsgCodec;
 import org.jpsoft.tfcws.ws.msg.Envelope;
 import org.jpsoft.tfcws.ws.msg.JoinPayload;
 import org.jpsoft.tfcws.ws.msg.MsgType;
@@ -29,28 +26,22 @@ import java.time.Duration;
 import java.util.Set;
 
 /**
- * Flujo que se ejecuta cuando se establece una conexión WebSocket y se espera
- * un mensaje inicial de tipo "join" con la posición del cliente.
+ * Flujo que prepara la conexión inicial de un cliente WebSocket.
  *
- * <p>Responsabilidades principales:
+ * <p>Responsabilidades claves:
  * <ul>
- *   <li>Leer el primer mensaje entrante del cliente (se asume que es un "join").</li>
- *   <li>Parsear ese mensaje para obtener una {@link Position} válida.</li>
- *   <li>Llamar a {@link SubscriptionService#suscribeInitialZones} para suscribir al cliente
- *       a las zonas (chunks) iniciales en función de su posición.</li>
- *   <li>Construir y devolver un {@link WebSocketMessage} JSON informando de las zonas suscritas
- *       (tipo de mensaje: {@code SUBSCRIBED}).</li>
- *   <li>En caso de error o timeout en el mensaje "join", usar una posición por defecto (0,0)
- *       y continuar con la suscripción.</li>
+ *   <li>Escuchar el primer {@code Envelope} de tipo {@code JOIN} que envía el cliente.</li>
+ *   <li>Aplicar un timeout y fallback (posición "0,0") cuando el mensaje no llega o está mal formado.</li>
+ *   <li>Delegar en {@link SubscriptionService#suscribeInitialZones} la suscripción a los chunks iniciales.</li>
+ *   <li>Generar el mensaje {@code SUBSCRIBED} con los chunks asignados y emitir los correspondientes
+ *       mensajes {@code SNAPSHOT_ZONE} que provienen de {@link InMemoryPresence#buildSnapShotZone}.</li>
  * </ul>
- * <p>
- * Diseño y notas:
+ *
+ * <p>Diseño:
  * <ul>
- *   <li>Esta clase delega la lógica concreta de suscripción a {@link SubscriptionService}.</li>
- *   <li>Los métodos que parsean y construyen mensajes devuelven {@link Mono} para integrarse
- *       en cadenas reactivas sin bloquear.</li>
- *   <li>Hay un TODO para extraer los parsers a una clase separada si se desea mejorar la
- *       separación de responsabilidades.</li>
+ *   <li>El flujo se integra con Reactor para no bloquear la lectura del mensaje inicial.</li>
+ *   <li>Se registran errores y se aplica un fallback implícito (posición 0,0) antes de continuar.</li>
+ *   <li>Las cargas útiles JSON las construye {@link MsgCodec} y las convierte en {@link WebSocketMessage}.</li>
  * </ul>
  */
 @Component
@@ -60,11 +51,11 @@ public class OnConnectFlow {
     /**
      * Servicio encargado de gestionar las suscripciones a zonas.
      */
-    private final SubscriptionService subscriptionService;
+    private final SubscriptionService subscribedSnapshots;
     /**
      * Gestor de presencia en memoria.
      */
-    private final InMemoryPresence presence;
+    private final Presence presence;
     /**
      * Codec para convertir objetos a mensajes WebSocket.
      */
@@ -81,41 +72,33 @@ public class OnConnectFlow {
      * Tiempo máximo que se espera por el mensaje "join" inicial recibido desde el cliente.
      * Si no llega en este tiempo, se usa una posición por defecto (0,0).
      */
-    private Duration joinTimeout = Duration.ofSeconds(5);
+    private final Duration joinTimeout = Duration.ofSeconds(5);
 
     /**
      * Ejecuta el flujo de conexión para una sesión WebSocket.
      *
-     * <p>Comportamiento general:
+     * <p>Este metodo sigue los pasos:
      * <ol>
-     *   <li>Obtiene el primer mensaje disponible del {@code inbound} usando {@code inbound.next()}.</li>
-     *   <li>Aplica un timeout de {@link #joinTimeout}; si expira, se usa la posición por defecto.</li>
-     *   <li>Convierte el payload de texto a {@link Position} con {@link #parseJoinErrorToPosition}.</li>
-     *   <li>Si no hay mensaje (flux completado sin elementos) o si ocurre un error
-     *       (timeout / parseo), se aplica un fallback a la posición (0,0).</li>
-     *   <li>Con la posición resultante, construye el mensaje de suscripción y lo devuelve.
-     *       El resultado es un {@link Mono}&lt;{@link WebSocketMessage}&gt; que puede ser enviado
-     *       inmediatamente por el manejador WebSocket.</li>
+     *   <li>Filtra el stream {@code bus} para quedarse con el primer envelope {@code JOIN}.</li>
+     *   <li>Aplica un timeout de {@link #joinTimeout}; si expira o el payload es inválido, se resuelve con la
+     *       posición por defecto (0,0) registrando el error.</li>
+     *   <li>Invoca al {@link SubscriptionService} para subscribir al jugador a las zonas iniciales
+     *       en función de la posición obtenida.</li>
+     *   <li>Construye un mensaje {@code SUBSCRIBED} y una secuencia de {@code SNAPSHOT_ZONE}
+     *       usando los datos devueltos por {@link InMemoryPresence#buildSnapShotZone}.
      * </ol>
      *
-     * <p>Notas sobre operadores usados en la cadena reactiva:
+     * <p>Notas sobre la implementación reactiva:
      * <ul>
-     *   <li>{@code inbound.next()} transforma el flujo {@link Flux} en un {@link Mono}
-     *       que emite sólo el primer elemento disponible o completa si no hay ninguno.</li>
-     *   <li>{@code timeout(joinTimeout)} lanza un error si el primer elemento tarda más de
-     *       {@code joinTimeout} en llegar; este error es manejado por {@code onErrorResume}.</li>
-     *   <li>{@code map(...)} transforma el {@link WebSocketMessage} en su representación textual.</li>
-     *   <li>{@code flatMap(this::parseJoinErrorToPosition)} encadena una operación asíncrona
-     *       que puede devolver un error (por eso retorna {@link Mono}).</li>
-     *   <li>{@code switchIfEmpty(...)} cubre el caso en el que el {@link Flux} entrante
-     *       se completa sin emitir elementos (cliente no envió mensaje alguno).</li>
-     *   <li>{@code onErrorResume(...)} captura errores (timeout, parseo inválido, etc.) y
-     *       aplica un fallback controlado para continuar el flujo sin romper la conexión.
+     *   <li>{@code next()} convierte el {@link Flux} en un {@link Mono} que emite solo la primera coincidencia.</li>
+     *   <li>{@code timeout(...)} asegura que no se bloquea indefinidamente esperando el mensaje.</li>
+     *   <li>{@code switchIfEmpty(...)} y {@code onErrorResume(...)} aplican la posición de respaldo.
+     *   <li>Las etapas posteriores transforman los datos en mensajes Texto que se envían al cliente.</li>
      * </ul>
      *
      * @param session objeto de sesión WebSocket (usado para obtener id y dirección)
-     * @param inbound flujo de mensajes entrantes desde el cliente
-     * @return un {@link Mono} que emite un {@link WebSocketMessage} con la confirmación de suscripción
+     * @param bus flujo de mensajes entrantes desde el cliente
+     * @return un {@link Flux} que primero emite el mensaje de suscripción y luego los snapshots asociados
      */
     public Flux<WebSocketMessage> run(WebSocketSession session, Flux<Envelope> bus) {
         final String sessionId = session.getId();
@@ -150,7 +133,7 @@ public class OnConnectFlow {
                 });
 
         // Suscribir a las zonas iniciales basadas en la posición obtenida
-        Mono<Set<ChunkCoord>> zonesMono = positionMono.map(pos -> subscriptionService.suscribeInitialZones(sessionId, pos));
+        Mono<Set<ChunkCoord>> zonesMono = positionMono.map(pos -> subscribedSnapshots.suscribeInitialZones(sessionId, pos));
 
         // Construir el flujo de snapshots para las zonas suscritas
         Mono<WebSocketMessage> suscribedSnapshots = zonesMono
@@ -167,4 +150,3 @@ public class OnConnectFlow {
     }
 
 }
-
