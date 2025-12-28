@@ -53,9 +53,9 @@ import java.util.concurrent.locks.ReentrantLock;
      * </ul>
      */
 @Component
-public class InMemoryRegistry implements SessionRegistry {
+public class InMemorySessionRegistry implements SessionRegistry {
 
-    private static final Logger log = LoggerFactory.getLogger(InMemoryRegistry.class);
+    private static final Logger log = LoggerFactory.getLogger(InMemorySessionRegistry.class);
 
     /**
      * Vista: zona -> sesiones.
@@ -81,7 +81,7 @@ public class InMemoryRegistry implements SessionRegistry {
     private final ConcurrentMap<String, ReentrantLock> sessionLocks;
 
 
-    public InMemoryRegistry() {
+    public InMemorySessionRegistry() {
         this.sessionsByZone = new ConcurrentHashMap<>();
         this.zonesBySessions = new ConcurrentHashMap<>();
         this.sessionLocks = new ConcurrentHashMap<>();
