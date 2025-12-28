@@ -13,4 +13,33 @@ public record PlayerSessionState(
         Long createdAtMs,
         Long lastUpdatedMs
 ) {
+
+    // Cambia solo la posición y el updatedAt
+    public PlayerSessionState withPosition(Position newPos, Long nowMs) {
+        return new PlayerSessionState(
+                playerId,
+                currentAOIChunks,
+                newPos,
+                currentChunk,
+                createdAtMs,
+                nowMs
+        );
+    }
+
+    // Cambia chunk + AOI + position, y el updatedAt
+    public PlayerSessionState withChunkAndAoi(
+            ChunkCoord newChunk,
+            Set<ChunkCoord> newAoi,
+            Position newPos,
+            long nowMs
+    ) {
+        return new PlayerSessionState(
+                playerId,
+                newAoi, // defensa si te pasan algo mutable
+                newPos,
+                newChunk,
+                createdAtMs,
+                nowMs
+        );
+    }
 }

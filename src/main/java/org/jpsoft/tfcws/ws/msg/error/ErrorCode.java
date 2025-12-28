@@ -5,7 +5,8 @@ public enum ErrorCode {
     BAD_MESSAGE("Invalid message"),
     NOT_JOINED("Send JOIN first"),
     JOIN_TIMEOUT("JOIN not received in time"),
-    BAD_MOVE("Invalid MOVE payload");
+    BAD_MOVE("Invalid MOVE payload"),
+    BAD_STATE("Invalid session state");
 
     private final String message;
 
