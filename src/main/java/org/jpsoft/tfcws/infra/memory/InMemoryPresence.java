@@ -1,3 +1,4 @@
+// java
 package org.jpsoft.tfcws.infra.memory;
 
 import lombok.extern.slf4j.Slf4j;
@@ -17,23 +18,26 @@ import java.util.concurrent.locks.ReentrantLock;
 /**
  * Gestor en memoria de la presencia de sesiones/jugadores por zona.
  *
- * <p>Responsabilidades:
- * - Mantener la posición actual por sesión (\`positionBySession\`).
- * - Mantener para cada zona un mapa de sesiones presentes y sus posiciones
- * (\`presenceByZone\`).
- * - Serializar operaciones que afectan a una misma sesión usando un lock por sesión
- * (\`sessionLocks\`).</p>
+ * <p>
+ * Responsabilidades principales:
+ * <ul>
+ *   <li>Mantener la posición actual por sesión en {@code positionByPlayer}.</li>
+ *   <li>Mantener, por cada zona (chunk), el mapa de sesiones presentes y sus posiciones en {@code playerByChunk}.</li>
+ *   <li>Serializar operaciones que afectan a una misma sesión usando un lock por sesión en {@code locksByPlayerId}.</li>
+ * </ul>
+ * </p>
  *
- * <p>Garantías y notas de concurrencia:
- * - Las estructuras internas usan implementaciones concurrentes para permitir
- * accesos concurrentes entre sesiones diferentes.
- * - Las operaciones que combinan múltiples estructuras por sesión (upsert/remove)
- * se realizan bajo el mismo {@link ReentrantLock} por sesión, garantizando atomicidad
- * por sesión, pero no entre sesiones diferentes.
- * - Las lecturas de snapshot son \"eventualmente consistentes\": pueden reflejar
- * un estado intermedio si hay escrituras concurrentes.</p>
+ * <p>
+ * Invariantes y garantías de concurrencia:
+ * <ul>
+ *   <li>Las estructuras internas son concurrentes para permitir accesos paralelos de sesiones distintas.</li>
+ *   <li>Operaciones que afectan a una misma sesión (upsert/remove) se serializan mediante un {@link ReentrantLock}
+ *       por sesión garantizando atomicidad por sesión, sin bloquear otras sesiones.</li>
+ *   <li>Las operaciones de lectura (snapshots) son eventualemente consistentes: pueden reflejar estados intermedios
+ *       cuando hay escrituras concurrentes.</li>
+ * </ul>
+ * </p>
  */
-
 @Slf4j
 @Component
 public class InMemoryPresence implements Presence {
@@ -42,7 +46,7 @@ public class InMemoryPresence implements Presence {
      * Mapa concurrente sessionId -> Position.
      * Contiene la posición actual conocida de cada sesión.
      */
-    private final ConcurrentHashMap<String, Position> positionBySession = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Position> positionByPlayer = new ConcurrentHashMap<>();
 
     /**
      * Mapa concurrente zoneKey -> (mapa sessionId -> Position).
@@ -50,64 +54,66 @@ public class InMemoryPresence implements Presence {
      * Cada valor es un ConcurrentHashMap para permitir actualizaciones concurrentes
      * de distintas sesiones dentro de la misma zona.
      */
-    private final ConcurrentHashMap<String, Map<String, Position>> presenceByZone = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, Position>> playerByChunk = new ConcurrentHashMap<>();
 
     /**
      * Mapa concurrente sessionId -> ReentrantLock.
      * Se usa un lock por sesión para serializar operaciones que modifican las estructuras
-     * relativas a esa sesión (upsert/remove).
+     * relativas a esa sesión (upsert/remove). Los locks se eliminan cuando ya no son necesarios
+     * para evitar crecimiento indefinido.
      */
-    private final ConcurrentMap<String, ReentrantLock> sessionLocks = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ReentrantLock> locksByPlayerId = new ConcurrentHashMap<>();
 
     /**
      * Inserta o actualiza la posición de una sesión y asegura su presencia en el chunk
      * correspondiente a esa posición.
      *
-     * <p>Comportamiento preciso:
-     * - Adquiere el {@link ReentrantLock} asociado a {@code sessionId} para serializar
-     *   operaciones relativas a esa sesión (atomicidad por sesión).
-     * - Actualiza {@code positionBySession} con la {@code position} proporcionada.
-     * - Calcula el chunk actual con {@link ChunkGeometry#posToChunk(Position)} y
-     *   garantiza que en {@code presenceByZone} exista el mapa de esa zona; añade o actualiza
-     *   la entrada {@code sessionId -> position} en el mapa de esa zona.
-     * - Si el conjunto {@code zones} no contiene el chunk calculado se registra una
-     *   advertencia, pero la operación sigue insertando la presencia en el chunk
-     *   calculado a partir de {@code position} (es decir, el método no sincroniza ni
-     *   elimina presencia en otras zonas proporcionadas en {@code zones}).</p>
+     * <p>Comportamiento:
+     * <ul>
+     *   <li>Valida que {@code playerId} y {@code position} no sean {@code null} y que {@code playerId} no esté vacío.</li>
+     *   <li>Adquiere el {@link ReentrantLock} asociado a {@code playerId} para serializar operaciones relativas a esa sesión.</li>
+     *   <li>Actualiza {@code positionByPlayer} y ajusta la pertenencia en {@code playerByChunk}: elimina la entrada del chunk antiguo
+     *       si cambió y añade/actualiza la entrada en el chunk actual calculado con {@link ChunkGeometry#posToChunk(Position)}.</li>
+     *   <li>Si el mapa de una zona queda vacío se elimina de {@code playerByChunk} usando {@code remove(key, value)} para evitar races.</li>
+     * </ul>
+     * </p>
      *
-     * <p>Garantías y notas de concurrencia:
-     * - Atomicidad por sesión gracias al lock por {@code sessionId}; no hay garantía
-     *   de consistencia entre sesiones concurrentes.
-     * - Las estructuras internas usan tipos concurrentes (ConcurrentHashMap) para permitir
-     *   accesos simultáneos entre distintas sesiones.
-     * - La vista que obtengan lectores concurrentes puede reflejar un estado intermedio
-     *   (no es un snapshot transaccional).</p>
-     *
-     * @param sessionId id de la sesión a actualizar
-     * @param position  nueva posición de la sesión
-     * @param zones     conjunto de zonas declarado como área de interés (AOI) del cliente;
-     *                  se usa solo para validar / advertir si el chunk actual no está
-     *                  dentro de esa AOI, pero no se asume que el método sincronice
-     *                  presencia en todas las zonas de este conjunto.
+     * @param playerId id de la sesión a actualizar; no puede ser {@code null} ni vacío
+     * @param position nueva posición de la sesión; no puede ser {@code null}
+     * @throws IllegalArgumentException si {@code playerId} es {@code null} o vacío, o si {@code position} es {@code null}
      */
-    //    Upsert es la combinación de "update" e "insert".
-    public void upsertPresence(String sessionId, Position position, Set<ChunkCoord> zones) {
-        ReentrantLock lock = lockFor(sessionId);
+    @Override
+    public void upsertPresence(String playerId, Position position) {
+        if (playerId == null || playerId.isEmpty()) {
+            throw new IllegalArgumentException("playerId no puede ser null o vacío");
+        }
+        if (position == null) {
+            throw new IllegalArgumentException("position no puede ser null");
+        }
+
+        ReentrantLock lock = lockFor(playerId);
         lock.lock();
-
         try {
-            positionBySession.put(sessionId, position);
-
+            Position oldPosition = positionByPlayer.put(playerId, position);
+            ChunkCoord oldChunk = null;
             ChunkCoord current = ChunkGeometry.posToChunk(position);
 
-            if (!zones.contains(current)) {
-                log.warn("presence_upsert AOI does not contain current chunk sessionId={} current={} aoi={}",
-                        sessionId, current, zones);
+            if (oldPosition != null) {
+                oldChunk = ChunkGeometry.posToChunk(oldPosition);
             }
 
-            presenceByZone.computeIfAbsent(current.getZoneKey(), k -> new ConcurrentHashMap<>())
-                    .put(sessionId, position);
+            if (oldChunk != null && !oldChunk.equals(current)) {
+                ConcurrentHashMap<String, Position> playersInChunk = playerByChunk.get(oldChunk.getZoneKey());
+                if (playersInChunk != null) {
+                    playersInChunk.remove(playerId);
+                    if (playersInChunk.isEmpty()) {
+                        playerByChunk.remove(oldChunk.getZoneKey(), playersInChunk);
+                    }
+                }
+            }
 
+            playerByChunk.computeIfAbsent(current.getZoneKey(), k -> new ConcurrentHashMap<>())
+                    .put(playerId, position);
         } finally {
             lock.unlock();
         }
@@ -116,59 +122,42 @@ public class InMemoryPresence implements Presence {
     /**
      * Elimina la presencia de una sesión de las estructuras en memoria.
      *
-     * <p>Comportamiento preciso:
-     * - Adquiere el {@link ReentrantLock} asociado a {@code sessionId} para serializar
-     *   la eliminación relativa a esa sesión.
-     * - Intenta eliminar la entrada en {@code positionBySession} y obtiene la última
-     *   posición conocida ({@code lastPosition}).
-     * - Si {@code lastPosition} existe, calcula la zona (chunk) correspondiente y
-     *   elimina {@code sessionId} únicamente del mapa de esa zona.
-     * - Si {@code lastPosition} es {@code null} (no hay posición conocida), se itera
-     *   sobre el conjunto {@code zones} proporcionado y se remueve {@code sessionId}
-     *   de cada una de esas zonas (esto cubre casos en que el estado local del caller
-     *   conoce la AOI pero la posición interna fue previamente eliminada).
-     * - Cuando un mapa de presencia de zona queda vacío se remueve la entrada de
-     *   {@code presenceByZone} usando {@code remove(key, value)} para evitar races.</p>
+     * <p>Comportamiento:
+     * <ul>
+     *   <li>Valida que {@code playerId} no sea {@code null} ni vacío.</li>
+     *   <li>Adquiere el {@link ReentrantLock} asociado a {@code playerId} para serializar la eliminación relativa a esa sesión.</li>
+     *   <li>Elimina la entrada en {@code positionByPlayer} y, si existía una posición, remueve la presencia
+     *       de {@code playerId} del chunk correspondiente.</li>
+     *   <li>Si el mapa de presencia de la zona queda vacío se elimina la entrada de {@code playerByChunk} con {@code remove(key, value)}.</li>
+     *   <li>Tras liberar el lock se intenta eliminar el lock de {@code locksByPlayerId} para evitar crecimiento indefinido.</li>
+     * </ul>
+     * </p>
      *
-     * <p>Garantías y notas de concurrencia:
-     * - Atomicidad por sesión mientras se mantiene el lock; otras sesiones pueden
-     *   modificar sus propios datos concurrentemente.
-     * - Tras liberar el lock se elimina el {@link ReentrantLock} de {@code sessionLocks}
-     *   (con una pequeña ventana en la que otro hilo puede crear un nuevo lock para la
-     *   misma sesión); esto evita crecimiento indefinido de la tabla de locks.</p>
-     *
-     * @param sessionId id de la sesión a eliminar
-     * @param zones     conjunto de zonas de la AOI que el llamador considera; se usan
-     *                  solo cuando no existe una posición conocida para la sesión
-     *                  (es decir, {@code positionBySession} devolvió {@code null}).
+     * @param playerId id de la sesión a eliminar; no puede ser {@code null} ni vacío
+     * @throws IllegalArgumentException si {@code playerId} es {@code null} o vacío
      */
-    public void removePresence(String sessionId, Set<ChunkCoord> zones) {
-        ReentrantLock lock = lockFor(sessionId);
+    @Override
+    public void removePresence(String playerId) {
+        if (playerId == null || playerId.isEmpty()) {
+            throw new IllegalArgumentException("playerId no puede ser null o vacío");
+        }
+
+        ReentrantLock lock = lockFor(playerId);
         lock.lock();
         try {
-            Position lastPosition = positionBySession.remove(sessionId);
+            Position lastPosition = positionByPlayer.remove(playerId);
 
             if (lastPosition == null) {
-                log.warn("presence_remove sessionId={} not found in positionBySession", sessionId);
+                log.warn("presence_remove playerId={} not found in positionByPlayer", playerId);
             }
+
             if (lastPosition != null) {
                 String lastZoneKey = ChunkGeometry.posToChunk(lastPosition).getZoneKey();
-                Map<String, Position> zonePresence = presenceByZone.get(lastZoneKey);
-                if (zonePresence != null ) {
-                    zonePresence.remove(sessionId);
+                Map<String, Position> zonePresence = playerByChunk.get(lastZoneKey);
+                if (zonePresence != null) {
+                    zonePresence.remove(playerId);
                     if (zonePresence.isEmpty()) {
-                        presenceByZone.remove(lastZoneKey, zonePresence);
-                    }
-                }
-            } else {
-                for (ChunkCoord zone : zones) {
-                    Map<String, Position> zonePresence = presenceByZone.get(zone.getZoneKey());
-
-                    if (zonePresence != null) {
-                        zonePresence.remove(sessionId);
-                        if (zonePresence.isEmpty()) {
-                            presenceByZone.remove(zone.getZoneKey(), zonePresence);
-                        }
+                        playerByChunk.remove(lastZoneKey, zonePresence);
                     }
                 }
             }
@@ -176,39 +165,44 @@ public class InMemoryPresence implements Presence {
             lock.unlock();
         }
 
-        sessionLocks.remove(sessionId);
+        locksByPlayerId.remove(playerId, lock);
     }
 
     /**
      * Construye una lista de snapshots por zona con la vista actual de jugadores en cada zona.
      *
      * <p>Comportamiento:
-     * - Para cada \`ChunkCoord\` en \`zones\` consulta \`presenceByZone\`.
-     * - Si existe presencia en la zona crea una lista de {@link PlayerViewPayload} con id, nombre
-     * (actualmente un placeholder \"Nombre\") y las coordenadas de posición.
-     * - Devuelve una lista de {@link SnapShotZonePayload} (una por zona encontrada).</p>
+     * <ul>
+     *   <li>Valida que {@code playerId} no sea {@code null} ni vacío y que {@code zones} no sea {@code null}.</li>
+     *   <li>Para cada {@link ChunkCoord} en {@code zones} consulta {@code playerByChunk} y, si hay presencia,
+     *       crea una {@link SnapShotZonePayload} con una lista de {@link PlayerViewPayload} (id, nombre y coordenadas).</li>
+     *   <li>No se excluye automáticamente la propia {@code playerId}; si se desea omitirla el llamador debe filtrar.</li>
+     * </ul>
+     * </p>
      *
-     * <p>Notas y consideraciones:
-     * - No excluye por defecto la propia \`sessionId\`. Si se quiere omitir al jugador que
-     * solicita la snapshot hay que filtrar manualmente las entradas cuyo key == sessionId.
-     * - Las lecturas desde mapas concurrentes son consistentes por operación, pero la snapshot
-     * puede reflejar cambios concurrentes (no es un snapshot transaccional).
-     * - Se usa actualmente el literal \"Nombre\" como nombre de jugador; si existe un nombre real
-     * deberá obtenerse y usarse aquí.</p>
-     *
-     * @param sessionId id de la sesión solicitante (no se usa para filtrar por defecto)
-     * @param zones     conjunto de zonas para las que construir la snapshot
-     * @return lista de snapshots por zona
+     * @param playerId id de la sesión solicitante (no se usa para filtrar por defecto); no puede ser {@code null} ni vacío
+     * @param zones conjunto de zonas para las que construir la snapshot; no puede ser {@code null}
+     * @return lista de {@link SnapShotZonePayload} (nunca {@code null}, puede ser vacía)
+     * @throws IllegalArgumentException si {@code playerId} es {@code null} o vacío, o si {@code zones} es {@code null}
      */
-    public List<SnapShotZonePayload> buildSnapShotZone(String sessionId, Set<ChunkCoord> zones) {
+    @Override
+    public List<SnapShotZonePayload> buildSnapShotZone(String playerId, Set<ChunkCoord> zones) {
+        if (playerId == null || playerId.isEmpty()) {
+            throw new IllegalArgumentException("playerId no puede ser null o vacío");
+        }
+        if (zones == null) {
+            throw new IllegalArgumentException("zones no puede ser null");
+        }
+
         List<SnapShotZonePayload> snapshots = new ArrayList<>();
 
         zones.forEach(zone -> {
             String zoneKey = zone.getZoneKey();
 
-            if (presenceByZone.containsKey(zoneKey)) {
+            ConcurrentHashMap<String, Position> playersInZone = playerByChunk.get(zoneKey);
+            if (playersInZone != null && !playersInZone.isEmpty()) {
                 List<PlayerViewPayload> players = new ArrayList<>();
-                presenceByZone.get(zoneKey).forEach((key, value) -> {
+                playersInZone.forEach((key, value) -> {
                     players.add(new PlayerViewPayload(key, "Nombre", value.x(), value.y()));
                 });
 
@@ -219,9 +213,16 @@ public class InMemoryPresence implements Presence {
         return snapshots;
     }
 
-    private ReentrantLock lockFor(String sessionId) {
-        return sessionLocks.computeIfAbsent(sessionId, id -> new ReentrantLock());
+    /**
+     * Obtiene o crea el {@link ReentrantLock} asociado a {@code playerId}.
+     *
+     * <p>El lock es usado para serializar operaciones que afectan a la misma sesión.
+     * Se crea bajo demanda y puede ser eliminado posteriormente desde {@link #removePresence}.</p>
+     *
+     * @param playerId id de la sesión; no debe ser {@code null}
+     * @return lock asociado a {@code playerId}
+     */
+    private ReentrantLock lockFor(String playerId) {
+        return locksByPlayerId.computeIfAbsent(playerId, id -> new ReentrantLock());
     }
-
-
 }

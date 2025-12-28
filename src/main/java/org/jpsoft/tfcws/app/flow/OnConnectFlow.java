@@ -1,12 +1,14 @@
 package org.jpsoft.tfcws.app.flow;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.jpsoft.tfcws.app.port.Presence;
-import org.jpsoft.tfcws.app.subscription.SubscriptionService;
+import org.jpsoft.tfcws.app.port.SessionRegistry;
+import org.jpsoft.tfcws.app.port.SessionStateStore;
+import org.jpsoft.tfcws.domain.session.PlayerSessionState;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
+import org.jpsoft.tfcws.domain.world.ChunkGeometry;
 import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
 import org.jpsoft.tfcws.adapter.ws.MsgCodec;
 import org.jpsoft.tfcws.ws.msg.Envelope;
@@ -26,127 +28,176 @@ import java.time.Duration;
 import java.util.Set;
 
 /**
- * Flujo que prepara la conexión inicial de un cliente WebSocket.
- *
- * <p>Responsabilidades claves:
- * <ul>
- *   <li>Escuchar el primer {@code Envelope} de tipo {@code JOIN} que envía el cliente.</li>
- *   <li>Aplicar un timeout y fallback (posición "0,0") cuando el mensaje no llega o está mal formado.</li>
- *   <li>Delegar en {@link SubscriptionService#suscribeInitialZones} la suscripción a los chunks iniciales.</li>
- *   <li>Generar el mensaje {@code SUBSCRIBED} con los chunks asignados y emitir los correspondientes
- *       mensajes {@code SNAPSHOT_ZONE} que provienen de {@link InMemoryPresence#buildSnapShotZone}.</li>
- * </ul>
- *
- * <p>Diseño:
- * <ul>
- *   <li>El flujo se integra con Reactor para no bloquear la lectura del mensaje inicial.</li>
- *   <li>Se registran errores y se aplica un fallback implícito (posición 0,0) antes de continuar.</li>
- *   <li>Las cargas útiles JSON las construye {@link MsgCodec} y las convierte en {@link WebSocketMessage}.</li>
- * </ul>
+ * OnConnectFlow
+ * <p>
+ * Responsable de orquestar la conexión inicial de un cliente WebSocket conectado al servidor.
+ * Esta clase transforma el flujo de mensajes entrantes (bus) en los mensajes que se deben enviar
+ * inicialmente al cliente: primero un mensaje SUBSCRIBED con las zonas asignadas y luego una secuencia
+ * de SNAPSHOT_ZONE que describen el estado de cada zona.
+ * <p>
+ * Comportamiento y efectos secundarios:
+ * - Espera el primer mensaje de tipo JOIN enviado por el cliente y extrae la posición.
+ * - Si el JOIN no llega o es inválido, aplica un fallback a la posición (0,0) y continúa.
+ * - Calcula el chunk y las zonas AOI (area of interest) a partir de la posición.
+ * - Registra la sesión en el `SessionRegistry` y la presencia en el `Presence`.
+ * - Guarda el estado inicial de la sesión en `SessionStateStore`.
+ * - Construye y devuelve un flujo de WebSocketMessage que primero emite SUBSCRIBED y después
+ * los SNAPSHOT_ZONE para cada zona (obtenidos de `Presence.buildSnapShotZone`).
+ * <p>
+ * Contrato (inputs/outputs):
+ * - Entrada: `WebSocketSession` (meta de sesión) y `Flux<Envelope>` (mensajes entrantes desde cliente).
+ * - Salida: `Flux<WebSocketMessage>` (mensajes que deben ser enviados al cliente inmediatamente tras conectar).
+ * <p>
+ * Mecanismo de error y tolerancia:
+ * - Se aplica un timeout configurable (JOIN_TIMEOUT). Si el mensaje JOIN no llega a tiempo
+ * o no puede parsearse, se hace fallback a la posición (0,0) y el proceso continúa.
+ * - Los errores derivados del parseo del payload se manejan con logs y fallback; no se propagan
+ * hacia el cliente en esta etapa.
+ * <p>
+ * Notas de diseño:
+ * - Basado en Reactor (Flux/Mono) para no bloquear el hilo que atiende la conexión.
+ * - Las operaciones que realizan efectos secundarios (registro de sesión, presencia, store)
+ * se ejecutan en la rama reactiva tras resolverse la posición inicial.
+ * - La construcción de mensajes JSON/text se delega a {@link MsgCodec}.
+ * <p>
+ * Referencias:
+ * - {@link InMemoryPresence#buildSnapShotZone} produce los payloads para SNAPSHOT_ZONE.
  */
 @Component
 @RequiredArgsConstructor
 public class OnConnectFlow {
-
-    /**
-     * Servicio encargado de gestionar las suscripciones a zonas.
-     */
-    private final SubscriptionService subscribedSnapshots;
     /**
      * Gestor de presencia en memoria.
      */
     private final Presence presence;
     /**
+     * Registro de sesiones por zona.
+     */
+    private final SessionRegistry sessionRegistry;
+    /**
+     * Almacenamiento del estado de la sesión.
+     */
+    private final SessionStateStore sessionStateStore;
+    /**
      * Codec para convertir objetos a mensajes WebSocket.
      */
     private final MsgCodec codec;
 
-    /**
-     * Mapper JSON usado para parsear y crear mensajes JSON de salida.
-     */
-    private final ObjectMapper objectMapper;
-
     private static final Logger log = LoggerFactory.getLogger(OnConnectFlow.class);
-
     /**
      * Tiempo máximo que se espera por el mensaje "join" inicial recibido desde el cliente.
      * Si no llega en este tiempo, se usa una posición por defecto (0,0).
      */
-    private final Duration joinTimeout = Duration.ofSeconds(5);
+    private final Duration JOIN_TIMEOUT = Duration.ofSeconds(5);
 
     /**
      * Ejecuta el flujo de conexión para una sesión WebSocket.
-     *
-     * <p>Este metodo sigue los pasos:
-     * <ol>
-     *   <li>Filtra el stream {@code bus} para quedarse con el primer envelope {@code JOIN}.</li>
-     *   <li>Aplica un timeout de {@link #joinTimeout}; si expira o el payload es inválido, se resuelve con la
-     *       posición por defecto (0,0) registrando el error.</li>
-     *   <li>Invoca al {@link SubscriptionService} para subscribir al jugador a las zonas iniciales
-     *       en función de la posición obtenida.</li>
-     *   <li>Construye un mensaje {@code SUBSCRIBED} y una secuencia de {@code SNAPSHOT_ZONE}
-     *       usando los datos devueltos por {@link InMemoryPresence#buildSnapShotZone}.
-     * </ol>
-     *
-     * <p>Notas sobre la implementación reactiva:
-     * <ul>
-     *   <li>{@code next()} convierte el {@link Flux} en un {@link Mono} que emite solo la primera coincidencia.</li>
-     *   <li>{@code timeout(...)} asegura que no se bloquea indefinidamente esperando el mensaje.</li>
-     *   <li>{@code switchIfEmpty(...)} y {@code onErrorResume(...)} aplican la posición de respaldo.
-     *   <li>Las etapas posteriores transforman los datos en mensajes Texto que se envían al cliente.</li>
-     * </ul>
+     * <p>
+     * Flujo detallado:
+     * 1) Filtrar el `bus` para obtener el primer `Envelope` de tipo JOIN.
+     * 2) Aplicar un timeout (JOIN_TIMEOUT) para evitar bloqueos indefinidos.
+     * 3) Intentar parsear el payload a `JoinPayload` y obtener la posición (x,y).
+     * - Si el parseo falla o hay un error en cualquier punto, se registra el error y
+     * se aplica una posición por defecto (0,0) para continuar de forma tolerante.
+     * 4) A partir de la posición: calcular el `ChunkCoord` y las zonas AOI (set de chunks).
+     * 5) Registrar efectos secundarios:
+     * - `sessionRegistry.addSessionsToZones(sessionId, zones)`
+     * - `presence.upsertPresence(sessionId, pos, zones)`
+     * - `sessionStateStore.upsert(...)`
+     * 6) Construir y devolver un `Flux<WebSocketMessage>` que contiene:
+     * - Un mensaje `SUBSCRIBED` con las zonas asignadas.
+     * - Una concatenación de mensajes `SNAPSHOT_ZONE` (uno por payload devuelto por presence).
+     * <p>
+     * Detalle de operadores Reactor empleados (qué hacen):
+     * - filter(...).next(): busca el primer `Envelope` de tipo JOIN y lo convierte en un Mono.
+     * - timeout(...): si no se recibe a tiempo, produce un error que se captura y transforma en fallback.
+     * - flatMap(...): parsea el envelope y devuelve un Mono<Position>; errores de parseo se convierten en Mono.error.
+     * - switchIfEmpty(...): si no hubo ningún JOIN en el flujo, aplica un fallback con posición (0,0).
+     * - onErrorResume(...): captura errores (timeout, parseo, otros) y aplica fallback con posición (0,0).
+     * - flatMapMany(pos -> ...): a partir de la posición resultante, genera un flujo (Flux) con los mensajes
+     * que deben enviarse al cliente (SUBSCRIBED + SNAPSHOT_ZONE...).
      *
      * @param session objeto de sesión WebSocket (usado para obtener id y dirección)
-     * @param bus flujo de mensajes entrantes desde el cliente
+     * @param bus     flujo de mensajes entrantes desde el cliente
      * @return un {@link Flux} que primero emite el mensaje de suscripción y luego los snapshots asociados
      */
     public Flux<WebSocketMessage> run(WebSocketSession session, Flux<Envelope> bus) {
         final String sessionId = session.getId();
         final InetSocketAddress remoteAddress = session.getHandshakeInfo().getRemoteAddress();
 
-        // Primero: obtener el primer mensaje del cliente (si existe). Si tarda más de joinTimeout,
-        // se considera timeout y se cae al onErrorResume.
+        // -----------------------------
+        // 1) Obtener posición inicial
+        // -----------------------------
+        // Comentarios inline sobre el pipeline reactivo:
+        // - filter(envelope -> envelope.getType() == MsgType.JOIN): dejamos solo mensajes JOIN
+        // - next(): transformamos el Flux en Mono que emite solamente la primera coincidencia
+        // - timeout(JOIN_TIMEOUT): si no llega, Reactor lanza un TimeoutException
+        // - flatMap(... parseo ...): parseamos el payload JSON a JoinPayload; si falla, devolvemos Mono.error
+        // - switchIfEmpty(...): si no hubo ningún JOIN, aplicamos fallback (0,0)
+        // - onErrorResume(...): capturamos errores (timeout, parseo) y también aplicamos fallback (0,0)
         Mono<Position> positionMono = bus
                 .filter(envelope -> envelope.getType() == MsgType.JOIN)
                 .next()
-                .timeout(joinTimeout)
+                .timeout(JOIN_TIMEOUT)
                 .flatMap(
                         envelope -> {
                             try {
                                 JoinPayload joinPayload = codec.parsePayload(envelope, JoinPayload.class);
                                 return Mono.just(new Position(joinPayload.getX(), joinPayload.getY()));
                             } catch (JsonProcessingException e) {
+                                // Si el payload no es JSON válido para JoinPayload, propagamos error
                                 return Mono.error(e);
                             }
                         })
                 .switchIfEmpty(
                         Mono.defer(() -> {
+                            // No hubo JOIN en el flujo: fallback a (0,0)
                             log.error("Join_no_message_received -> fallback_position to (0,0) for sessionId={}, remoteAddress={}",
                                     sessionId, remoteAddress);
                             return Mono.just(new Position(0.0, 0.0));
                         })
                 )
                 .onErrorResume(ex -> {
+                    // Timeout o parseo inválido: registramos y devolvemos posición por defecto
                     log.error("Join_timeout_or_invalid_message -> fallback_position to (0,0) for sessionId={}, remoteAddress={} cause: {}",
                             sessionId, remoteAddress, ex.getMessage());
                     return Mono.just(new Position(0.0, 0.0));
                 });
 
-        // Suscribir a las zonas iniciales basadas en la posición obtenida
-        Mono<Set<ChunkCoord>> zonesMono = positionMono.map(pos -> subscribedSnapshots.suscribeInitialZones(sessionId, pos));
+        // ---------------------------------------
+        // 2) A partir de la posición: registrar y construir mensajes iniciales
+        // ---------------------------------------
+        return positionMono.flatMapMany(pos -> {
 
-        // Construir el flujo de snapshots para las zonas suscritas
-        Mono<WebSocketMessage> suscribedSnapshots = zonesMono
-                .map(zones ->
-                        codec.encode(MsgType.SUBSCRIBED, new SubscribedPayload(zones)))
-                .map(session::textMessage);
+            // Calcular el chunk que contiene la posición y las zonas de AOI (necesarias para suscripción)
+            ChunkCoord chunkCoord = ChunkGeometry.posToChunk(pos);
+            Set<ChunkCoord> zones = ChunkGeometry.getChunksInAOI(chunkCoord);
 
-        Flux<WebSocketMessage> snapshots = zonesMono.flatMapMany(
-                        zones -> Flux.fromIterable(presence.buildSnapShotZone(sessionId, zones)))
-                .map(snapShotZonePayload -> session.textMessage(codec.encode(MsgType.SNAPSHOT_ZONE, snapShotZonePayload)));
+            // Guardar estado inicial de la sesión
+            sessionStateStore.upsert(sessionId, new PlayerSessionState(sessionId, zones, pos, chunkCoord, System.currentTimeMillis(), null));
 
-        return suscribedSnapshots.concatWith(snapshots);
+            // Efectos secundarios: registrar la sesión en el registry y la presencia del jugador
+            sessionRegistry.addSessionsToZones(sessionId, zones);
+            presence.upsertPresence(sessionId, pos);
 
+
+            log.info("Session_joined -> sessionId={}, remoteAddress={}, position=({},{}), chunk=({},{}), zones={}",
+                    sessionId, remoteAddress, pos.x(), pos.y(), chunkCoord.cx(), chunkCoord.cy(), zones);
+
+            // Construir el mensaje SUBSCRIBED (respuesta inmediata al cliente)
+            Mono<WebSocketMessage> subscribedSnapshots = Mono.just(session
+                    .textMessage(codec
+                            .encode(MsgType.SUBSCRIBED, new SubscribedPayload(zones))));
+
+            // Obtener los payloads de snapshot por zona desde presence y mapearlos a WebSocketMessage
+            // Nota: buildSnapShotZone devuelve una colección/iterable de payloads
+            Flux<WebSocketMessage> snapshots = Flux.fromIterable(presence.buildSnapShotZone(sessionId, zones))
+                    .map(snapShotZonePayload ->
+                            session.textMessage(codec.encode(MsgType.SNAPSHOT_ZONE, snapShotZonePayload)));
+
+            // Concatenamos primero SUBSCRIBED (mono) y luego la secuencia de SNAPSHOT_ZONE
+            return subscribedSnapshots.concatWith(snapshots);
+        });
     }
 
 }
