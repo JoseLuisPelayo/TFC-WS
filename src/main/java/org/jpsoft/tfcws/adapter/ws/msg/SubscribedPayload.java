@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.ws.msg;
+package org.jpsoft.tfcws.adapter.ws.msg;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -12,6 +12,6 @@ import java.util.Set;
 @Setter
 @AllArgsConstructor
 @NoArgsConstructor
-public class DespawnZonesPayload {
-    private Set<ChunkCoord> zones;
+public class SubscribedPayload {
+    Set<ChunkCoord> subscribedChunks;
 }

@@ -1,9 +1,11 @@
-package org.jpsoft.tfcws.ws;
+package org.jpsoft.tfcws.config;
 
 import org.jpsoft.tfcws.adapter.ws.WsHandler;
+import org.jpsoft.tfcws.app.port.OutboundHub;
 import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.app.port.SessionRegistry;
 import org.jpsoft.tfcws.app.port.SessionStateStore;
+import org.jpsoft.tfcws.infra.memory.InMemoryOutboundHub;
 import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
 import org.jpsoft.tfcws.infra.memory.InMemorySessionRegistry;
 import org.jpsoft.tfcws.infra.memory.InMemorySessionStateStore;
@@ -69,6 +71,11 @@ public class WsConfig {
     @Bean
     public SessionRegistry sessionRegistry() {
         return new InMemorySessionRegistry();
+    }
+
+    @Bean
+    public OutboundHub outboundHub() {
+        return new InMemoryOutboundHub();
     }
 
 

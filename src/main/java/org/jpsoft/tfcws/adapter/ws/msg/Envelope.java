@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.ws.msg;
+package org.jpsoft.tfcws.adapter.ws.msg;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.AllArgsConstructor;
