@@ -152,7 +152,7 @@ public class WsHandler implements WebSocketHandler {
 
 
         // Ejecuta la lógica de movimiento que produce echos de movimiento.
-        Flux<WebSocketMessage> movementEcho = moveFlow.run(session, bus);
+        Mono<Void> moveWork = moveFlow.run(session, bus);
 
         Flux<WebSocketMessage> hubMessages = outboundHub.outboundMessages(id)
                 .map(session::textMessage);
@@ -162,13 +162,14 @@ public class WsHandler implements WebSocketHandler {
                 .map(tick -> session.pingMessage(buf -> buf.wrap(new byte[0])));
 
         // Outbound: concatenamos el mensaje de conexión inicial, los echos y los pings de heartbeat.
-        Flux<WebSocketMessage> outbound = Flux.merge(connectMessage, movementEcho, hubMessages, heartbeat);
+        Flux<WebSocketMessage> outbound = Flux.merge(connectMessage, hubMessages, heartbeat);
 
+        Mono<Void> inboundDone = inboundText.then();
 
         // Envía el outbound y espera la finalización del inbound.
         // En doFinally se realiza la limpieza del registro de sesiones y el log.
         return session.send(outbound)
-                .and(inboundText.then())
+                .and(Mono.when(inboundDone, moveWork))
                 .doFinally(s -> {
 
                     outboundHub.unregister(id);

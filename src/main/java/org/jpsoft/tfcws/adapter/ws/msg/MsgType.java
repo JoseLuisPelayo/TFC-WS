@@ -5,7 +5,7 @@ public enum MsgType {
     SUBSCRIBED,
     SNAPSHOT_ZONE,
     ERROR,
-    MOVE,
-    MOVED,
+    PLAYER_MOVE,
+    PLAYER_MOVED,
     DESPAWN_ZONES
 }
