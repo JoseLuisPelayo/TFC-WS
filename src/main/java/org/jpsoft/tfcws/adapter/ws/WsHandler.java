@@ -6,7 +6,6 @@ import org.jpsoft.tfcws.app.flow.OnMoveFlow;
 import org.jpsoft.tfcws.app.port.OutboundHub;
 import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.app.port.SessionRegistry;
-import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.app.flow.OnConnectFlow;
 import org.jpsoft.tfcws.adapter.ws.msg.Envelope;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorCode;
@@ -21,7 +20,6 @@ import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.util.Set;
 
 /**
  * Controlador WebSocket reactivo basado en Spring WebFlux.
