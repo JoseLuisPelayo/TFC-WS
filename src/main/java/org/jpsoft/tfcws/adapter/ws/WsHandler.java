@@ -3,6 +3,7 @@ package org.jpsoft.tfcws.adapter.ws;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jpsoft.tfcws.app.flow.OnMoveFlow;
+import org.jpsoft.tfcws.app.port.OutboundHub;
 import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.app.port.SessionRegistry;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
@@ -69,7 +70,13 @@ public class WsHandler implements WebSocketHandler {
      * Flujo que maneja los mensajes de movimiento (MOVE) recibidos desde el cliente.
      */
     private final OnMoveFlow moveFlow;
-
+    /**
+     * Hub de salida para enviar mensajes a las sesiones.
+     */
+    private final OutboundHub outboundHub;
+    /**
+     * Codec para parsear y serializar mensajes WebSocket.
+     */
     private final MsgCodec codec;
 
     /**
@@ -104,8 +111,10 @@ public class WsHandler implements WebSocketHandler {
     @Override
     public Mono<Void> handle(WebSocketSession session) {
         String id = session.getId();
-
         String address = String.valueOf(session.getHandshakeInfo().getRemoteAddress());
+
+        // Registramos la sesión en el registro de sesiones.
+        outboundHub.register(id);
 
         // Inbound: convertimos cada mensaje WebSocket a texto y lo compartimos para múltiples consumidores.
         Flux<String> inboundText = session.receive()
@@ -124,11 +133,16 @@ public class WsHandler implements WebSocketHandler {
                                 return Mono.just(
                                         codec.parseEnvelope(
                                                 codec.encode(
-                                                MsgType.ERROR,
-                                                new ErrorPayload(ErrorCode.BAD_JSON.name(), ErrorCode.BAD_JSON.defaultMessage())
-                                        )));
+                                                        MsgType.ERROR,
+                                                        new ErrorPayload(
+                                                                ErrorCode.BAD_JSON.name(),
+                                                                ErrorCode.BAD_JSON.defaultMessage()
+                                                        )
+                                                )
+                                        )
+                                );
                             } catch (IOException ex) {
-                                throw new RuntimeException(ex);
+                                return Mono.error(ex);
                             }
                         }))
                 .share();
@@ -140,13 +154,15 @@ public class WsHandler implements WebSocketHandler {
         // Ejecuta la lógica de movimiento que produce echos de movimiento.
         Flux<WebSocketMessage> movementEcho = moveFlow.run(session, bus);
 
+        Flux<WebSocketMessage> hubMessages = outboundHub.outboundMessages(id)
+                .map(session::textMessage);
+
         // Latido periódico: genera mensajes de tipo ping cada 30 segundos para mantener la conexión.
         Flux<WebSocketMessage> heartbeat = Flux.interval(Duration.ofSeconds(30))
                 .map(tick -> session.pingMessage(buf -> buf.wrap(new byte[0])));
 
         // Outbound: concatenamos el mensaje de conexión inicial, los echos y los pings de heartbeat.
-        Flux<WebSocketMessage> outbound = Flux.concat(connectMessage, movementEcho, heartbeat);
-
+        Flux<WebSocketMessage> outbound = Flux.merge(connectMessage, movementEcho, hubMessages, heartbeat);
 
 
         // Envía el outbound y espera la finalización del inbound.
@@ -155,12 +171,9 @@ public class WsHandler implements WebSocketHandler {
                 .and(inboundText.then())
                 .doFinally(s -> {
 
-                    String sessionId = session.getId();
-                    Set<ChunkCoord> zones = sessionRegistry.getZonesBySessionId(sessionId);
-                    if (!zones.isEmpty()) {
-                        presence.removePresence(sessionId);
-                    }
-                    sessionRegistry.removeSession(session.getId());
+                    outboundHub.unregister(id);
+                    presence.removePresence(id);
+                    sessionRegistry.removeSession(id);
 
                     log.info("WebSocket session ended: id={}, address={}", id, address);
                 });
