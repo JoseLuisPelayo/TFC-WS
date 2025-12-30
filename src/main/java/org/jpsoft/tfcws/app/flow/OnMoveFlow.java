@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jpsoft.tfcws.adapter.ws.MsgCodec;
+import org.jpsoft.tfcws.adapter.ws.msg.*;
+import org.jpsoft.tfcws.app.port.OutboundHub;
 import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.app.port.SessionRegistry;
 import org.jpsoft.tfcws.app.port.SessionStateStore;
@@ -12,9 +14,8 @@ import org.jpsoft.tfcws.domain.session.PlayerSessionState;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.domain.world.ChunkGeometry;
-import org.jpsoft.tfcws.ws.msg.*;
-import org.jpsoft.tfcws.ws.msg.error.ErrorCode;
-import org.jpsoft.tfcws.ws.msg.error.ErrorPayload;
+import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorCode;
+import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorPayload;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
@@ -32,81 +33,94 @@ public class OnMoveFlow {
     private final Presence presence;
     private final SessionRegistry sessionRegistry;
     private final SessionStateStore sessionStateStore;
+    private final OutboundHub outboundHub;
 
-    public Flux<WebSocketMessage> run(WebSocketSession session, Flux<Envelope> input) {
+    public Mono<Void> run(WebSocketSession session, Flux<Envelope> input) {
 
         String playerId = session.getId();
         String sessionId = session.getId();
 
         return input
-                .filter(envelope -> envelope.getType() == MsgType.MOVE)
+                .filter(envelope -> envelope.getType() == MsgType.PLAYER_MOVE)
                 .concatMap(envelope -> {
                     PlayerMovePayload payload = null;
                     try {
                         payload = codec.parsePayload(envelope, PlayerMovePayload.class);
                     } catch (JsonProcessingException e) {
-                        // Falla el parseo del payload MOVE, respondemos con BAD_MOVE.
-                        String json = codec.encode(MsgType.ERROR, new ErrorPayload(ErrorCode.BAD_MOVE.name(), e.getMessage()));
-                        return Mono.just(session.textMessage(json));
+                        sendTo(sessionId, MsgType.ERROR,
+                                new ErrorPayload(ErrorCode.BAD_MOVE.name(), e.getMessage()));
+                        return Mono.empty();
                     }
                     Position newPosition = new Position(payload.getX(), payload.getY());
                     ChunkCoord activeChunk = ChunkGeometry.posToChunk(newPosition);
-                    Optional<PlayerSessionState> state = sessionStateStore.get(sessionId);
                     long now = System.currentTimeMillis();
+                    Optional<PlayerSessionState> opt = sessionStateStore.get(sessionId);
+
+                    if (opt.isEmpty()) {
+                        sendTo(sessionId, MsgType.ERROR,
+                                new ErrorPayload(ErrorCode.BAD_STATE.name(), ErrorCode.BAD_STATE.defaultMessage()));
+                        return Mono.empty();
+                    }
+                    PlayerSessionState currentState = opt.get();
 
                     presence.upsertPresence(playerId, newPosition);
 
-                    if (state.isPresent()) {
-                        Flux<WebSocketMessage> snapshots = Flux.empty();
-                        Mono<WebSocketMessage> despawn = Mono.empty();
-                        PlayerSessionState currentState = state.get();
+                    if (!currentState.currentChunk().equals(activeChunk)) {
+                        AoiSwapResult changedZones = sessionRegistry.swapAoiZones(
+                                sessionId,
+                                activeChunk
+                        );
 
-                        if (!currentState.currentChunk().equals(activeChunk)) {
-                            AoiSwapResult changedZones = sessionRegistry.swapAoiZones(
-                                    sessionId,
-                                    activeChunk
-                            );
+                        sessionStateStore.upsert(sessionId, currentState.withChunkAndAoi(
+                                activeChunk,
+                                ChunkGeometry.getChunksInAOI(activeChunk),
+                                newPosition,
+                                now
+                        ));
 
-                            sessionStateStore.upsert(sessionId, currentState.withChunkAndAoi(
-                                    activeChunk,
-                                    ChunkGeometry.getChunksInAOI(activeChunk),
-                                    newPosition,
-                                    now
-                            ));
+                        presence.buildSnapShotZone(sessionId, changedZones.enteredZones()).forEach(snapShotZonePayload -> {
+                            sendTo(sessionId, MsgType.SNAPSHOT_ZONE, snapShotZonePayload);
+                        });
 
-                            snapshots = Flux.fromIterable(presence.buildSnapShotZone(sessionId, changedZones.enteredZones()))
-                                    .map(snapShotZonePayload ->
-                                            session.textMessage(codec.encode(MsgType.SNAPSHOT_ZONE, snapShotZonePayload)));
-
-                            despawn = Mono.just(session.textMessage(
-                                                    codec.encode(MsgType.DESPAWN_ZONES,
-                                                            new DespawnZonesPayload(changedZones.exitedZones())
-                                                            )));
-
-
-                        } else {
-                            sessionStateStore.upsert(sessionId, currentState.withPosition(
-                                    newPosition,
-                                    now
-                            ));
-
-                            log.info("Session {} moved to position: {}", sessionId, newPosition);
-                        }
-
-                        Mono<WebSocketMessage> move = Mono.just(session.textMessage(
-                                codec.encode(MsgType.MOVED,
-                                        new PlayerMovedAckPayload(
-                                                newPosition.x(),
-                                                newPosition.y(),
-                                                activeChunk.getZoneKey(),
-                                                now
-                                        ))));
-
-                        return snapshots.concatWith(despawn).concatWith(move);
+                        sendTo(
+                                sessionId,
+                                MsgType.DESPAWN_ZONES,
+                                new DespawnZonesPayload(changedZones.exitedZones()));
                     } else {
-                        String json = codec.encode(MsgType.ERROR, new ErrorPayload(ErrorCode.BAD_STATE.name(), ErrorCode.BAD_STATE.defaultMessage()));
-                        return Mono.just(session.textMessage(json));
+                        sessionStateStore.upsert(sessionId, currentState.withPosition(
+                                newPosition,
+                                now
+                        ));
+
+                        log.info("Session {} moved to position: {}", sessionId, newPosition);
                     }
-                });
+
+                    broadcastToZone(
+                            activeChunk,
+                            MsgType.PLAYER_MOVED,
+                            new PlayerMovedPayload(
+                                    playerId,
+                                    newPosition.x(),
+                                    newPosition.y(),
+                                    now
+                            ));
+
+
+                    return Mono.empty();
+                })
+                .then();
     }
+
+    private void sendTo(String sessionId, MsgType type, Object payload) {
+        String json = codec.encode(type, payload);
+        outboundHub.sendMessage(sessionId, json);
+    }
+
+    private void broadcastToZone(ChunkCoord zone, MsgType type, Object payload) {
+        String json = codec.encode(type, payload);
+        sessionRegistry.getSessionsByZone(zone)
+                .forEach(watcherId -> outboundHub.sendMessage(watcherId, json));
+    }
+
+
 }

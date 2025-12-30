@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.ws.msg.error;
+package org.jpsoft.tfcws.adapter.ws.msg.error;
 
 public enum ErrorCode {
     BAD_JSON("Invalid JSON"),

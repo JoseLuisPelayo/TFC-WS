@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.ws.msg;
+package org.jpsoft.tfcws.adapter.ws.msg.error;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -9,7 +9,7 @@ import lombok.Setter;
 @Setter
 @AllArgsConstructor
 @NoArgsConstructor
-public class JoinPayload {
-    private Double x;
-    private Double y;
+public class ErrorPayload {
+    private String code;
+    private String message;
 }
