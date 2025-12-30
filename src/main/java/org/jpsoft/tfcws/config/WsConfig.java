@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.ws;
+package org.jpsoft.tfcws.config;
 
 import org.jpsoft.tfcws.adapter.ws.WsHandler;
 import org.jpsoft.tfcws.app.port.Presence;

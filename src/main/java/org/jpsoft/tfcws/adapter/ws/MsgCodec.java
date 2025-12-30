@@ -4,9 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.jpsoft.tfcws.ws.msg.Envelope;
-import org.jpsoft.tfcws.ws.msg.MsgType;
-import org.jpsoft.tfcws.ws.msg.SnapShotZonePayload;
+import org.jpsoft.tfcws.adapter.ws.msg.Envelope;
+import org.jpsoft.tfcws.adapter.ws.msg.MsgType;
+import org.jpsoft.tfcws.adapter.ws.msg.SnapShotZonePayload;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;

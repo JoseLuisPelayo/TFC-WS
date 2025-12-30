@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.ws.msg;
+package org.jpsoft.tfcws.adapter.ws.msg;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -9,9 +9,9 @@ import lombok.Setter;
 @Setter
 @AllArgsConstructor
 @NoArgsConstructor
-public class PlayerViewPayload {
-    private String playerId;
-    private String playerName;
+public class PlayerMovedAckPayload {
     private double x;
     private double y;
+    private String chunk;
+    private Long timestamp;
 }
