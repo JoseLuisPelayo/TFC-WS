@@ -1,5 +1,6 @@
-package org.jpsoft.tfcws.app.subscription;
+package org.jpsoft.tfcws.app.port;
 
+import org.jpsoft.tfcws.app.port.dto.AoiSwapResult;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 
 import java.util.Set;
@@ -27,6 +28,7 @@ import java.util.Set;
 public interface SessionRegistry {
     void addSessionsToZones(String sessionId, Set<ChunkCoord> zones);
     void removeSession(String sessionId);
+    AoiSwapResult swapAoiZones(String sessionId, ChunkCoord newChunkCoord);
     Set<ChunkCoord> getZonesBySessionId(String sessionId);
     Set<String> getSessionsByZone(ChunkCoord zone);
 }

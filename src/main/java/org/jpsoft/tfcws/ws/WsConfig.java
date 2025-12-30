@@ -1,5 +1,12 @@
 package org.jpsoft.tfcws.ws;
 
+import org.jpsoft.tfcws.adapter.ws.WsHandler;
+import org.jpsoft.tfcws.app.port.Presence;
+import org.jpsoft.tfcws.app.port.SessionRegistry;
+import org.jpsoft.tfcws.app.port.SessionStateStore;
+import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
+import org.jpsoft.tfcws.infra.memory.InMemorySessionRegistry;
+import org.jpsoft.tfcws.infra.memory.InMemorySessionStateStore;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.HandlerMapping;
@@ -47,6 +54,21 @@ public class WsConfig {
     @Bean
     public WebSocketHandlerAdapter handlerAdapter() {
         return new WebSocketHandlerAdapter();
+    }
+
+    @Bean
+    public SessionStateStore sessionStateStore() {
+        return new InMemorySessionStateStore();
+    }
+
+    @Bean
+    public Presence presence() {
+        return new InMemoryPresence();
+    }
+
+    @Bean
+    public SessionRegistry sessionRegistry() {
+        return new InMemorySessionRegistry();
     }
 
 
