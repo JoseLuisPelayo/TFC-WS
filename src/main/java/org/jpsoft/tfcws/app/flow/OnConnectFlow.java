@@ -174,7 +174,7 @@ public class OnConnectFlow {
             Set<ChunkCoord> zones = ChunkGeometry.getChunksInAOI(chunkCoord);
 
             // Guardar estado inicial de la sesión
-            sessionStateStore.upsert(sessionId, new PlayerSessionState(sessionId, zones, pos, chunkCoord, System.currentTimeMillis(), null));
+            sessionStateStore.upsert(sessionId, new PlayerSessionState(sessionId, zones, pos, chunkCoord, System.currentTimeMillis(), System.currentTimeMillis()));
 
             // Efectos secundarios: registrar la sesión en el registry y la presencia del jugador
             sessionRegistry.addSessionsToZones(sessionId, zones);
