@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.ws.codec;
+package org.jpsoft.tfcws.adapter.ws;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
