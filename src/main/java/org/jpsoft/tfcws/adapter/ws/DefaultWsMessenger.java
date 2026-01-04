@@ -1,8 +1,7 @@
-package org.jpsoft.tfcws.app.messaging;
+package org.jpsoft.tfcws.adapter.ws;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.jpsoft.tfcws.adapter.ws.MsgCodec;
 import org.jpsoft.tfcws.adapter.ws.msg.MsgType;
 import org.jpsoft.tfcws.app.port.OutboundHub;
 import org.jpsoft.tfcws.app.port.SessionRegistry;
