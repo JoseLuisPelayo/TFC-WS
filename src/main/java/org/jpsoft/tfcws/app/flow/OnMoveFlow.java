@@ -75,12 +75,11 @@ public class OnMoveFlow {
                                 activeChunk,
                                 ChunkGeometry.getChunksInAOI(activeChunk),
                                 newPosition,
+                                payload.getDirection(),
                                 now
                         ));
 
-                        presence.buildSnapShotZone(sessionId, changedZones.enteredZones()).forEach(snapShotZonePayload -> {
-                            wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, snapShotZonePayload);
-                        });
+                        presence.buildSnapShotZone(sessionId, changedZones.enteredZones()).forEach(snapShotZonePayload -> wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, snapShotZonePayload));
 
                         wsMessenger.sendTo(
                                 sessionId,
@@ -89,6 +88,7 @@ public class OnMoveFlow {
                     } else {
                         sessionStateStore.upsert(sessionId, currentState.withPosition(
                                 newPosition,
+                                payload.getDirection(),
                                 now
                         ));
 

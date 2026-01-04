@@ -7,6 +7,7 @@ import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.app.port.SessionRegistry;
 import org.jpsoft.tfcws.app.port.SessionStateStore;
 import org.jpsoft.tfcws.app.port.WsMessenger;
+import org.jpsoft.tfcws.domain.actor.Direction;
 import org.jpsoft.tfcws.domain.session.PlayerSessionState;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
@@ -16,7 +17,6 @@ import org.jpsoft.tfcws.adapter.ws.MsgCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -172,7 +172,7 @@ public class OnConnectFlow {
                     Set<ChunkCoord> zones = ChunkGeometry.getChunksInAOI(chunkCoord);
 
                     // Guardar estado inicial de la sesión
-                    sessionStateStore.upsert(sessionId, new PlayerSessionState(sessionId, zones, pos, chunkCoord, System.currentTimeMillis(), System.currentTimeMillis()));
+                    sessionStateStore.upsert(sessionId, new PlayerSessionState(sessionId, zones, pos, chunkCoord, Direction.SOUTH,System.currentTimeMillis(), System.currentTimeMillis()));
 
                     // Efectos secundarios: registrar la sesión en el registry y la presencia del jugador
                     sessionRegistry.addSessionsToZones(sessionId, zones);
