@@ -6,6 +6,7 @@ import org.jpsoft.tfcws.app.port.OutboundHub;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -122,5 +123,15 @@ public class InMemoryOutboundHub implements OutboundHub {
     public Flux<String> outboundMessages(String sessionId) {
         Sinks.Many<String> sink = outboxes.get(sessionId);
         return sink != null ? sink.asFlux() : Flux.empty();
+    }
+
+    /**
+     * Obtiene el conjunto de IDs de sesión actualmente registradas.
+     *
+     * @return conjunto inmutable de IDs de sesión
+     */
+    @Override
+    public Set<String> sessionIds() {
+        return Set.copyOf(outboxes.keySet());
     }
 }
