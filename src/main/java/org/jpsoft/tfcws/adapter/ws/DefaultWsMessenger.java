@@ -113,4 +113,18 @@ public class DefaultWsMessenger implements WsMessenger {
                     }
                 }));
     }
+
+    /**
+     * Broadcast a TODOS los usuarios conectados.
+     * <p>
+     * Uso típico:
+     * messenger.broadcastToAll(MsgType.SERVER_ANNOUNCEMENT, new AnnouncementPayload(...));
+     */
+    @Override
+    public void broadcastToAll(MsgType type, Object payload) {
+        String json = codec.encode(type, payload);
+        outboundHub.sessionIds().forEach(id ->
+                outboundHub.sendMessage(id, json)
+        );
+    }
 }

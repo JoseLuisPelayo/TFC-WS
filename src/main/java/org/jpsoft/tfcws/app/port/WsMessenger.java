@@ -12,4 +12,6 @@ public interface WsMessenger {
     void broadcastToZone(ChunkCoord zone, MsgType type, Object payload);
 
     void broadcastToZones(Set<ChunkCoord> zones, MsgType type, Object payload);
+
+    void broadcastToAll(MsgType type, Object payload);
 }
