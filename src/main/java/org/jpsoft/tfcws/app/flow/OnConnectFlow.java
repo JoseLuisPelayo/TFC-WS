@@ -2,23 +2,21 @@ package org.jpsoft.tfcws.app.flow;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.RequiredArgsConstructor;
+import org.jpsoft.tfcws.adapter.ws.msg.*;
 import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.app.port.SessionRegistry;
 import org.jpsoft.tfcws.app.port.SessionStateStore;
+import org.jpsoft.tfcws.app.port.WsMessenger;
+import org.jpsoft.tfcws.domain.actor.Direction;
 import org.jpsoft.tfcws.domain.session.PlayerSessionState;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.domain.world.ChunkGeometry;
 import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
 import org.jpsoft.tfcws.adapter.ws.MsgCodec;
-import org.jpsoft.tfcws.adapter.ws.msg.Envelope;
-import org.jpsoft.tfcws.adapter.ws.msg.JoinPayload;
-import org.jpsoft.tfcws.adapter.ws.msg.MsgType;
-import org.jpsoft.tfcws.adapter.ws.msg.SubscribedPayload;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -82,6 +80,10 @@ public class OnConnectFlow {
      * Codec para convertir objetos a mensajes WebSocket.
      */
     private final MsgCodec codec;
+    /**
+     * Mensajería WebSocket para enviar mensajes al cliente.
+     */
+    private final WsMessenger wsMessenger;
 
     private static final Logger log = LoggerFactory.getLogger(OnConnectFlow.class);
     /**
@@ -121,7 +123,7 @@ public class OnConnectFlow {
      * @param bus     flujo de mensajes entrantes desde el cliente
      * @return un {@link Flux} que primero emite el mensaje de suscripción y luego los snapshots asociados
      */
-    public Flux<WebSocketMessage> run(WebSocketSession session, Flux<Envelope> bus) {
+    public Mono<Void> run(WebSocketSession session, Flux<Envelope> bus) {
         final String sessionId = session.getId();
         final InetSocketAddress remoteAddress = session.getHandshakeInfo().getRemoteAddress();
 
@@ -135,7 +137,8 @@ public class OnConnectFlow {
         // - flatMap(... parseo ...): parseamos el payload JSON a JoinPayload; si falla, devolvemos Mono.error
         // - switchIfEmpty(...): si no hubo ningún JOIN, aplicamos fallback (0,0)
         // - onErrorResume(...): capturamos errores (timeout, parseo) y también aplicamos fallback (0,0)
-        Mono<Position> positionMono = bus
+
+        return bus
                 .filter(envelope -> envelope.getType() == MsgType.JOIN)
                 .next()
                 .timeout(JOIN_TIMEOUT)
@@ -162,42 +165,37 @@ public class OnConnectFlow {
                     log.error("Join_timeout_or_invalid_message -> fallback_position to (0,0) for sessionId={}, remoteAddress={} cause: {}",
                             sessionId, remoteAddress, ex.getMessage());
                     return Mono.just(new Position(0.0, 0.0));
-                });
+                }).flatMap(pos -> {
 
-        // ---------------------------------------
-        // 2) A partir de la posición: registrar y construir mensajes iniciales
-        // ---------------------------------------
-        return positionMono.flatMapMany(pos -> {
+                    // Calcular el chunk que contiene la posición y las zonas de AOI (necesarias para suscripción)
+                    ChunkCoord chunkCoord = ChunkGeometry.posToChunk(pos);
+                    Set<ChunkCoord> zones = ChunkGeometry.getChunksInAOI(chunkCoord);
 
-            // Calcular el chunk que contiene la posición y las zonas de AOI (necesarias para suscripción)
-            ChunkCoord chunkCoord = ChunkGeometry.posToChunk(pos);
-            Set<ChunkCoord> zones = ChunkGeometry.getChunksInAOI(chunkCoord);
+                    // Guardar estado inicial de la sesión
+                    sessionStateStore.upsert(sessionId, new PlayerSessionState(sessionId, zones, pos, chunkCoord, Direction.SOUTH,System.currentTimeMillis(), System.currentTimeMillis()));
 
-            // Guardar estado inicial de la sesión
-            sessionStateStore.upsert(sessionId, new PlayerSessionState(sessionId, zones, pos, chunkCoord, System.currentTimeMillis(), System.currentTimeMillis()));
-
-            // Efectos secundarios: registrar la sesión en el registry y la presencia del jugador
-            sessionRegistry.addSessionsToZones(sessionId, zones);
-            presence.upsertPresence(sessionId, pos);
+                    // Efectos secundarios: registrar la sesión en el registry y la presencia del jugador
+                    sessionRegistry.addSessionsToZones(sessionId, zones);
+                    presence.upsertPresence(sessionId, pos);
 
 
-            log.info("Session_joined -> sessionId={}, remoteAddress={}, position=({},{}), chunk=({},{}), zones={}",
-                    sessionId, remoteAddress, pos.x(), pos.y(), chunkCoord.cx(), chunkCoord.cy(), zones);
+                    log.info("Session_joined -> sessionId={}, remoteAddress={}, position=({},{}), chunk=({},{}), zones={}",
+                            sessionId, remoteAddress, pos.x(), pos.y(), chunkCoord.cx(), chunkCoord.cy(), zones);
 
-            // Construir el mensaje SUBSCRIBED (respuesta inmediata al cliente)
-            Mono<WebSocketMessage> subscribedSnapshots = Mono.just(session
-                    .textMessage(codec
-                            .encode(MsgType.SUBSCRIBED, new SubscribedPayload(zones))));
+                    // Notificar al jugador que su estado inicial está listo
+                    wsMessenger.sendTo(sessionId, MsgType.INITIAL_STATE, new PlayerViewPayload(sessionId, "nombre_jugador", pos.x(), pos.y()));
+                    // Notificar a otros jugadores en la misma zona que este jugador ha cargado
+                    wsMessenger.broadcastToZone(chunkCoord, MsgType.PLAYER_LOADED, new PlayerViewPayload(sessionId, "nombre_jugador", pos.x(), pos.y()));
+                    // Construir el mensaje SUBSCRIBED (respuesta inmediata al cliente)
+                    wsMessenger.sendTo(sessionId, MsgType.SUBSCRIBED, new SubscribedPayload(zones));
+                    // Construir y enviar los mensajes SNAPSHOT_ZONE para cada zona
+                    presence.buildSnapShotZone(sessionId, zones).forEach(
+                            snapShotZonePayload -> wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, snapShotZonePayload)
+                    );
 
-            // Obtener los payloads de snapshot por zona desde presence y mapearlos a WebSocketMessage
-            // Nota: buildSnapShotZone devuelve una colección/iterable de payloads
-            Flux<WebSocketMessage> snapshots = Flux.fromIterable(presence.buildSnapShotZone(sessionId, zones))
-                    .map(snapShotZonePayload ->
-                            session.textMessage(codec.encode(MsgType.SNAPSHOT_ZONE, snapShotZonePayload)));
-
-            // Concatenamos primero SUBSCRIBED (mono) y luego la secuencia de SNAPSHOT_ZONE
-            return subscribedSnapshots.concatWith(snapshots);
-        });
+                    return Mono.empty();
+                })
+                .then();
     }
 
 }

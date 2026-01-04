@@ -2,6 +2,8 @@ package org.jpsoft.tfcws.app.port;
 
 import reactor.core.publisher.Flux;
 
+import java.util.Set;
+
 /**
  * Puerto de salida (outbound) para envío y distribución de mensajes por sesión.
  *
@@ -73,4 +75,11 @@ public interface OutboundHub {
      * @return {@link Flux} que emite los mensajes salientes para la sesión
      */
     Flux<String> outboundMessages(String sessionId);
+
+    /**
+     * Obtiene el conjunto de IDs de sesión actualmente registradas.
+     *
+     * @return conjunto de IDs de sesión registradas
+     */
+    Set<String> sessionIds();
 }

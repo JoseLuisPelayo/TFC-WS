@@ -5,10 +5,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jpsoft.tfcws.adapter.ws.MsgCodec;
 import org.jpsoft.tfcws.adapter.ws.msg.*;
-import org.jpsoft.tfcws.app.port.OutboundHub;
 import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.app.port.SessionRegistry;
 import org.jpsoft.tfcws.app.port.SessionStateStore;
+import org.jpsoft.tfcws.app.port.WsMessenger;
 import org.jpsoft.tfcws.app.port.dto.AoiSwapResult;
 import org.jpsoft.tfcws.domain.session.PlayerSessionState;
 import org.jpsoft.tfcws.domain.spatial.Position;
@@ -17,7 +17,6 @@ import org.jpsoft.tfcws.domain.world.ChunkGeometry;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorCode;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorPayload;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -31,9 +30,10 @@ public class OnMoveFlow {
 
     private final MsgCodec codec;
     private final Presence presence;
-    private final SessionRegistry sessionRegistry;
     private final SessionStateStore sessionStateStore;
-    private final OutboundHub outboundHub;
+    private final SessionRegistry sessionRegistry;
+    private final WsMessenger wsMessenger;
+
 
     public Mono<Void> run(WebSocketSession session, Flux<Envelope> input) {
 
@@ -47,7 +47,7 @@ public class OnMoveFlow {
                     try {
                         payload = codec.parsePayload(envelope, PlayerMovePayload.class);
                     } catch (JsonProcessingException e) {
-                        sendTo(sessionId, MsgType.ERROR,
+                        wsMessenger.sendTo(sessionId, MsgType.ERROR,
                                 new ErrorPayload(ErrorCode.BAD_MOVE.name(), e.getMessage()));
                         return Mono.empty();
                     }
@@ -57,7 +57,7 @@ public class OnMoveFlow {
                     Optional<PlayerSessionState> opt = sessionStateStore.get(sessionId);
 
                     if (opt.isEmpty()) {
-                        sendTo(sessionId, MsgType.ERROR,
+                        wsMessenger.sendTo(sessionId, MsgType.ERROR,
                                 new ErrorPayload(ErrorCode.BAD_STATE.name(), ErrorCode.BAD_STATE.defaultMessage()));
                         return Mono.empty();
                     }
@@ -75,27 +75,27 @@ public class OnMoveFlow {
                                 activeChunk,
                                 ChunkGeometry.getChunksInAOI(activeChunk),
                                 newPosition,
+                                payload.getDirection(),
                                 now
                         ));
 
-                        presence.buildSnapShotZone(sessionId, changedZones.enteredZones()).forEach(snapShotZonePayload -> {
-                            sendTo(sessionId, MsgType.SNAPSHOT_ZONE, snapShotZonePayload);
-                        });
+                        presence.buildSnapShotZone(sessionId, changedZones.enteredZones()).forEach(snapShotZonePayload -> wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, snapShotZonePayload));
 
-                        sendTo(
+                        wsMessenger.sendTo(
                                 sessionId,
                                 MsgType.DESPAWN_ZONES,
                                 new DespawnZonesPayload(changedZones.exitedZones()));
                     } else {
                         sessionStateStore.upsert(sessionId, currentState.withPosition(
                                 newPosition,
+                                payload.getDirection(),
                                 now
                         ));
 
                         log.info("Session {} moved to position: {}", sessionId, newPosition);
                     }
 
-                    broadcastToZone(
+                    wsMessenger.broadcastToZone(
                             activeChunk,
                             MsgType.PLAYER_MOVED,
                             new PlayerMovedPayload(
@@ -110,17 +110,5 @@ public class OnMoveFlow {
                 })
                 .then();
     }
-
-    private void sendTo(String sessionId, MsgType type, Object payload) {
-        String json = codec.encode(type, payload);
-        outboundHub.sendMessage(sessionId, json);
-    }
-
-    private void broadcastToZone(ChunkCoord zone, MsgType type, Object payload) {
-        String json = codec.encode(type, payload);
-        sessionRegistry.getSessionsByZone(zone)
-                .forEach(watcherId -> outboundHub.sendMessage(watcherId, json));
-    }
-
 
 }

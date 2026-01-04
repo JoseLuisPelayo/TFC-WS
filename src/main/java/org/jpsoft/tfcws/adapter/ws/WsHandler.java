@@ -6,7 +6,6 @@ import org.jpsoft.tfcws.app.flow.OnMoveFlow;
 import org.jpsoft.tfcws.app.port.OutboundHub;
 import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.app.port.SessionRegistry;
-import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.app.flow.OnConnectFlow;
 import org.jpsoft.tfcws.adapter.ws.msg.Envelope;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorCode;
@@ -21,7 +20,6 @@ import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.util.Set;
 
 /**
  * Controlador WebSocket reactivo basado en Spring WebFlux.
@@ -148,7 +146,7 @@ public class WsHandler implements WebSocketHandler {
                 .share();
 
         // Ejecuta la lógica de conexión que puede producir un mensaje inicial (o vaciarse).
-        Flux<WebSocketMessage> connectMessage = connectFlow.run(session, bus);
+        Mono<Void> connectWork = connectFlow.run(session, bus);
 
 
         // Ejecuta la lógica de movimiento que produce echos de movimiento.
@@ -162,14 +160,14 @@ public class WsHandler implements WebSocketHandler {
                 .map(tick -> session.pingMessage(buf -> buf.wrap(new byte[0])));
 
         // Outbound: concatenamos el mensaje de conexión inicial, los echos y los pings de heartbeat.
-        Flux<WebSocketMessage> outbound = Flux.merge(connectMessage, hubMessages, heartbeat);
+        Flux<WebSocketMessage> outbound = Flux.merge(hubMessages, heartbeat);
 
         Mono<Void> inboundDone = inboundText.then();
 
         // Envía el outbound y espera la finalización del inbound.
         // En doFinally se realiza la limpieza del registro de sesiones y el log.
         return session.send(outbound)
-                .and(Mono.when(inboundDone, moveWork))
+                .and(Mono.when(inboundDone, moveWork, connectWork))
                 .doFinally(s -> {
 
                     outboundHub.unregister(id);
