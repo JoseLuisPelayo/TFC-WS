@@ -12,7 +12,6 @@ import org.jpsoft.tfcws.domain.session.PlayerSessionState;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.domain.world.ChunkGeometry;
-import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
 import org.jpsoft.tfcws.adapter.ws.MsgCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +22,8 @@ import reactor.core.publisher.Mono;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -58,8 +59,6 @@ import java.util.Set;
  * se ejecutan en la rama reactiva tras resolverse la posición inicial.
  * - La construcción de mensajes JSON/text se delega a {@link MsgCodec}.
  * <p>
- * Referencias:
- * - {@link InMemoryPresence#buildSnapShotZone} produce los payloads para SNAPSHOT_ZONE.
  */
 @Component
 @RequiredArgsConstructor
@@ -171,26 +170,69 @@ public class OnConnectFlow {
                     ChunkCoord chunkCoord = ChunkGeometry.posToChunk(pos);
                     Set<ChunkCoord> zones = ChunkGeometry.getChunksInAOI(chunkCoord);
 
+                    PlayerSessionState state = new PlayerSessionState(
+                            sessionId,
+                            zones,
+                            pos,
+                            chunkCoord,
+                            Direction.SOUTH,
+                            System.currentTimeMillis(),
+                            System.currentTimeMillis());
+
                     // Guardar estado inicial de la sesión
-                    sessionStateStore.upsert(sessionId, new PlayerSessionState(sessionId, zones, pos, chunkCoord, Direction.SOUTH,System.currentTimeMillis(), System.currentTimeMillis()));
+                    sessionStateStore.upsert(sessionId, state);
 
                     // Efectos secundarios: registrar la sesión en el registry y la presencia del jugador
                     sessionRegistry.addSessionsToZones(sessionId, zones);
                     presence.upsertPresence(sessionId, pos);
 
-
                     log.info("Session_joined -> sessionId={}, remoteAddress={}, position=({},{}), chunk=({},{}), zones={}",
                             sessionId, remoteAddress, pos.x(), pos.y(), chunkCoord.cx(), chunkCoord.cy(), zones);
 
                     // Notificar al jugador que su estado inicial está listo
-                    wsMessenger.sendTo(sessionId, MsgType.INITIAL_STATE, new PlayerViewPayload(sessionId, "nombre_jugador", pos.x(), pos.y()));
+                    wsMessenger.sendTo(sessionId, MsgType.INITIAL_STATE, new PlayerViewPayload(
+                            sessionId,
+                            "nombre_jugador",
+                            state.currentPosition().x(),
+                            state.currentPosition().y(),
+                            state.direction()
+                    ));
+
                     // Notificar a otros jugadores en la misma zona que este jugador ha cargado
-                    wsMessenger.broadcastToZone(chunkCoord, MsgType.PLAYER_LOADED, new PlayerViewPayload(sessionId, "nombre_jugador", pos.x(), pos.y()));
+                    wsMessenger.broadcastToZone(chunkCoord, MsgType.PLAYER_LOADED, new PlayerViewPayload(
+                            sessionId,
+                            "nombre_jugador",
+                            state.currentPosition().x(),
+                            state.currentPosition().y(),
+                            state.direction()));
+
                     // Construir el mensaje SUBSCRIBED (respuesta inmediata al cliente)
                     wsMessenger.sendTo(sessionId, MsgType.SUBSCRIBED, new SubscribedPayload(zones));
-                    // Construir y enviar los mensajes SNAPSHOT_ZONE para cada zona
-                    presence.buildSnapShotZone(sessionId, zones).forEach(
-                            snapShotZonePayload -> wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, snapShotZonePayload)
+
+                    // Enviar snapshot de las zonas asignadas
+                    zones.forEach(zone -> {
+                                Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
+                                List<PlayerViewPayload> aux = entitiesInZone.stream().map(
+                                        entityId -> {
+                                            if (!entityId.equals(sessionId)) {
+                                                Optional<PlayerSessionState> psState = sessionStateStore.get(entityId);
+                                                if (psState.isPresent()) {
+                                                    PlayerSessionState otherState = psState.get();
+                                                    return new PlayerViewPayload(
+                                                            otherState.playerId(),
+                                                            "nombre_jugador",
+                                                            otherState.currentPosition().x(),
+                                                            otherState.currentPosition().y(),
+                                                            otherState.direction()
+                                                    );
+                                                }
+                                            }
+                                            return new PlayerViewPayload();
+                                        }
+                                ).toList();
+
+                                wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, new SnapShotZonePayload(zone.getZoneKey(), aux));
+                            }
                     );
 
                     return Mono.empty();

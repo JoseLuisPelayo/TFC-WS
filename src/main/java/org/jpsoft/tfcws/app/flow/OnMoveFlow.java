@@ -21,7 +21,9 @@ import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -35,12 +37,12 @@ public class OnMoveFlow {
     private final WsMessenger wsMessenger;
 
 
-    public Mono<Void> run(WebSocketSession session, Flux<Envelope> input) {
+    public Mono<Void> run(WebSocketSession session, Flux<Envelope> bus) {
 
         String playerId = session.getId();
         String sessionId = session.getId();
 
-        return input
+        return bus
                 .filter(envelope -> envelope.getType() == MsgType.PLAYER_MOVE)
                 .concatMap(envelope -> {
                     PlayerMovePayload payload = null;
@@ -79,7 +81,31 @@ public class OnMoveFlow {
                                 now
                         ));
 
-                        presence.buildSnapShotZone(sessionId, changedZones.enteredZones()).forEach(snapShotZonePayload -> wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, snapShotZonePayload));
+                // Enviar snapshot de las nuevas zonas ingresadas
+                        changedZones.enteredZones().forEach(zone -> {
+                                    Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
+                                    List<PlayerViewPayload> aux = entitiesInZone.stream().map(
+                                            entityId -> {
+                                                if (!entityId.equals(sessionId)) {
+                                                    Optional<PlayerSessionState> psState = sessionStateStore.get(entityId);
+                                                    if (psState.isPresent()) {
+                                                        PlayerSessionState otherState = psState.get();
+                                                        return new PlayerViewPayload(
+                                                                otherState.playerId(),
+                                                                "nombre_jugador",
+                                                                otherState.currentPosition().x(),
+                                                                otherState.currentPosition().y(),
+                                                                otherState.direction()
+                                                        );
+                                                    }
+                                                }
+                                                return new PlayerViewPayload();
+                                            }
+                                    ).toList();
+
+                                    wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, new SnapShotZonePayload(zone.getZoneKey(), aux));
+                                }
+                        );
 
                         wsMessenger.sendTo(
                                 sessionId,

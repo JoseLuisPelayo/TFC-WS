@@ -56,16 +56,6 @@ public interface Presence {
      */
     void removePresence(String sessionId);
 
-    /**
-     * Construye y devuelve los payloads de snapshot de las zonas indicadas para la sesión.
-     *
-     * <p>El resultado representa el estado relevante de cada {@code ChunkCoord}
-     * necesario para sincronizar la vista del cliente asociado a {@code sessionId}.</p>
-     *
-     * @param sessionId identificador de la sesión que solicita el snapshot; no puede ser {@code null}
-     * @param zones     conjunto de coordenadas de zona (chunks) para incluir en el snapshot; no puede ser {@code null}
-     * @return lista de {@link SnapShotZonePayload} que representan el estado de cada zona; nunca {@code null} (puede ser vacía)
-     * @throws IllegalArgumentException si {@code sessionId} o {@code zones} son {@code null}
-     */
-    List<SnapShotZonePayload> buildSnapShotZone(String sessionId, Set<ChunkCoord> zones);
+    // Devuelve un conjunto con los IDs de las entidades presentes en la zona indicada
+    Set<String> getEntitiesInZone(ChunkCoord chunkCoord);
 }

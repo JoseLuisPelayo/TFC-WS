@@ -6,10 +6,7 @@ import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.domain.world.ChunkGeometry;
-import org.jpsoft.tfcws.adapter.ws.msg.PlayerViewPayload;
-import org.jpsoft.tfcws.adapter.ws.msg.SnapShotZonePayload;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -168,49 +165,12 @@ public class InMemoryPresence implements Presence {
         locksByPlayerId.remove(playerId, lock);
     }
 
-    /**
-     * Construye una lista de snapshots por zona con la vista actual de jugadores en cada zona.
-     *
-     * <p>Comportamiento:
-     * <ul>
-     *   <li>Valida que {@code playerId} no sea {@code null} ni vacío y que {@code zones} no sea {@code null}.</li>
-     *   <li>Para cada {@link ChunkCoord} en {@code zones} consulta {@code playerByChunk} y, si hay presencia,
-     *       crea una {@link SnapShotZonePayload} con una lista de {@link PlayerViewPayload} (id, nombre y coordenadas).</li>
-     *   <li>No se excluye automáticamente la propia {@code playerId}; si se desea omitirla el llamador debe filtrar.</li>
-     * </ul>
-     * </p>
-     *
-     * @param playerId id de la sesión solicitante (no se usa para filtrar por defecto); no puede ser {@code null} ni vacío
-     * @param zones conjunto de zonas para las que construir la snapshot; no puede ser {@code null}
-     * @return lista de {@link SnapShotZonePayload} (nunca {@code null}, puede ser vacía)
-     * @throws IllegalArgumentException si {@code playerId} es {@code null} o vacío, o si {@code zones} es {@code null}
-     */
-    @Override
-    public List<SnapShotZonePayload> buildSnapShotZone(String playerId, Set<ChunkCoord> zones) {
-        if (playerId == null || playerId.isEmpty()) {
-            throw new IllegalArgumentException("playerId no puede ser null o vacío");
+    public Set<String> getEntitiesInZone(ChunkCoord chunkCoord) {
+        ConcurrentHashMap<String, Position> playersInZone = playerByChunk.get(chunkCoord.getZoneKey());
+        if (playersInZone != null && !playersInZone.isEmpty()) {
+            return playersInZone.keySet();
         }
-        if (zones == null) {
-            throw new IllegalArgumentException("zones no puede ser null");
-        }
-
-        List<SnapShotZonePayload> snapshots = new ArrayList<>();
-
-        zones.forEach(zone -> {
-            String zoneKey = zone.getZoneKey();
-
-            ConcurrentHashMap<String, Position> playersInZone = playerByChunk.get(zoneKey);
-            if (playersInZone != null && !playersInZone.isEmpty()) {
-                List<PlayerViewPayload> players = new ArrayList<>();
-                playersInZone.forEach((key, value) -> {
-                    players.add(new PlayerViewPayload(key, "Nombre", value.x(), value.y()));
-                });
-
-                snapshots.add(new SnapShotZonePayload(zoneKey, players));
-            }
-        });
-
-        return snapshots;
+        return Collections.emptySet();
     }
 
     /**
