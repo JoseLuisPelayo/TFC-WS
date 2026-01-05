@@ -1,11 +1,14 @@
 package org.jpsoft.tfcws.app.port;
 
-import org.jpsoft.tfcws.domain.session.PlayerSessionState;
+import org.jpsoft.tfcws.domain.actor.EntityState;
 
+import java.util.HashMap;
 import java.util.Optional;
+import java.util.Set;
 
 public interface SessionStateStore {
-    Optional<PlayerSessionState> get(String sessionId);
-    PlayerSessionState upsert(String sessionId, PlayerSessionState newState);
+    Optional<EntityState> get(String sessionId);
+    EntityState upsert(String sessionId, EntityState newState);
     void remove(String sessionId);
+    HashMap<String, EntityState> getAllSessions(Set<String> ids);
 }

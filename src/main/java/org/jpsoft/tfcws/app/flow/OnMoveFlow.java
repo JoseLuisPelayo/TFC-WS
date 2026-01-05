@@ -10,7 +10,7 @@ import org.jpsoft.tfcws.app.port.SessionRegistry;
 import org.jpsoft.tfcws.app.port.SessionStateStore;
 import org.jpsoft.tfcws.app.port.WsMessenger;
 import org.jpsoft.tfcws.app.port.dto.AoiSwapResult;
-import org.jpsoft.tfcws.domain.session.PlayerSessionState;
+import org.jpsoft.tfcws.domain.actor.EntityState;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.domain.world.ChunkGeometry;
@@ -21,9 +21,10 @@ import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.List;
+import java.util.HashMap;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -56,14 +57,14 @@ public class OnMoveFlow {
                     Position newPosition = new Position(payload.getX(), payload.getY());
                     ChunkCoord activeChunk = ChunkGeometry.posToChunk(newPosition);
                     long now = System.currentTimeMillis();
-                    Optional<PlayerSessionState> opt = sessionStateStore.get(sessionId);
+                    Optional<EntityState> opt = sessionStateStore.get(sessionId);
 
                     if (opt.isEmpty()) {
                         wsMessenger.sendTo(sessionId, MsgType.ERROR,
                                 new ErrorPayload(ErrorCode.BAD_STATE.name(), ErrorCode.BAD_STATE.defaultMessage()));
                         return Mono.empty();
                     }
-                    PlayerSessionState currentState = opt.get();
+                    EntityState currentState = opt.get();
 
                     presence.upsertPresence(playerId, newPosition);
 
@@ -83,34 +84,36 @@ public class OnMoveFlow {
 
                         // Enviar snapshot de las nuevas zonas ingresadas
                         changedZones.enteredZones().forEach(zone -> {
-                           Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
+                            Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
+                            HashMap<String, EntityState> states = sessionStateStore.getAllSessions(entitiesInZone);
 
-                           List<PlayerViewPayload> players = entitiesInZone.stream()
-                                   .filter(entityId -> !entityId.equals(sessionId))
-                                   .map(sessionStateStore::get)
-                                   .flatMap(Optional::stream)
-                                   .map(state -> new PlayerViewPayload(
-                                             state.playerId(),
-                                             "nombre_jugador",
-                                             state.currentPosition().x(),
-                                             state.currentPosition().y(),
-                                             state.direction()
-                                   ))
-                                   .toList();
+                            wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, new SnapShotZonePayload(zone.getZoneKey(), entitiesInZone.stream()
+                                    .filter(entityId -> !entityId.equals(sessionId))
+                                    .map(id -> {
+                                        EntityState state = states.get(id);
+                                        return new PlayerViewPayload(
+                                                state.playerId(),
+                                                "nombre_jugador",
+                                                state.currentPosition().x(),
+                                                state.currentPosition().y(),
+                                                state.direction());
+                                    }).toList()));
                         });
 
                         changedZones.exitedZones().forEach(zone -> {
                             Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
-                            wsMessenger.sendTo(
-                                    sessionId,
-                                    MsgType.DESPAWN_ENTITIES,
-                                    new DespawnPlayerPayload(entitiesInZone));
-
-                            entitiesInZone.forEach(entityId ->
-                                    wsMessenger.sendTo(entityId, MsgType.DESPAWN_ENTITIES,
-                                            new DespawnPlayerPayload(Set.of(sessionId)))
-                            );
+                            wsMessenger.sendTo(sessionId, MsgType.DESPAWN_ENTITIES, new DespawnPlayerPayload(entitiesInZone));
                         });
+
+                        // 2) Despawn a los demas jugadores que salieron de las zonas
+                        Set<String> watchers = changedZones.exitedZones().stream()
+                                .flatMap(zone -> sessionRegistry.getSessionsByZone(zone).stream())
+                                .filter(w -> !w.equals(sessionId))
+                                .collect(Collectors.toSet());
+
+                        watchers.forEach(watcherSession ->
+                                wsMessenger.sendTo(watcherSession, MsgType.DESPAWN_ENTITIES, new DespawnPlayerPayload(Set.of(playerId)))
+                        );
 
                     } else {
                         sessionStateStore.upsert(sessionId, currentState.withPosition(

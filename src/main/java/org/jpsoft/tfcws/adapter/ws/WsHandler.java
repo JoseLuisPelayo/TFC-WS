@@ -11,6 +11,7 @@ import org.jpsoft.tfcws.adapter.ws.msg.Envelope;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorCode;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorPayload;
 import org.jpsoft.tfcws.adapter.ws.msg.MsgType;
+import org.jpsoft.tfcws.app.port.SessionStateStore;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketMessage;
@@ -76,6 +77,7 @@ public class WsHandler implements WebSocketHandler {
      * Codec para parsear y serializar mensajes WebSocket.
      */
     private final MsgCodec codec;
+    private final SessionStateStore sessionStateStore;
 
     /**
      * Maneja una conexión WebSocket.
@@ -172,7 +174,9 @@ public class WsHandler implements WebSocketHandler {
 
                     outboundHub.unregister(id);
                     presence.removePresence(id);
+                    sessionStateStore.remove(id);
                     sessionRegistry.removeSession(id);
+
 
                     log.info("WebSocket session ended: id={}, address={}", id, address);
                 });

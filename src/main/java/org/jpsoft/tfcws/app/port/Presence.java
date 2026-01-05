@@ -2,10 +2,9 @@ package org.jpsoft.tfcws.app.port;
 
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
-import org.jpsoft.tfcws.adapter.ws.msg.SnapShotZonePayload;
 
-import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Contrato para la gestión de presencias de sesiones en el mundo.

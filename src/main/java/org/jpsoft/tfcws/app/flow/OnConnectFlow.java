@@ -8,7 +8,7 @@ import org.jpsoft.tfcws.app.port.SessionRegistry;
 import org.jpsoft.tfcws.app.port.SessionStateStore;
 import org.jpsoft.tfcws.app.port.WsMessenger;
 import org.jpsoft.tfcws.domain.actor.Direction;
-import org.jpsoft.tfcws.domain.session.PlayerSessionState;
+import org.jpsoft.tfcws.domain.actor.EntityState;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.domain.world.ChunkGeometry;
@@ -170,7 +170,7 @@ public class OnConnectFlow {
                     ChunkCoord chunkCoord = ChunkGeometry.posToChunk(pos);
                     Set<ChunkCoord> zones = ChunkGeometry.getChunksInAOI(chunkCoord);
 
-                    PlayerSessionState state = new PlayerSessionState(
+                    EntityState state = new EntityState(
                             sessionId,
                             zones,
                             pos,
@@ -213,7 +213,7 @@ public class OnConnectFlow {
                     zones.forEach(zone -> {
                         Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
 
-                        List<PlayerViewPayload> players = entitiesInZone.stream()
+                        wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, entitiesInZone.stream()
                                 .filter(entityId -> !entityId.equals(sessionId))
                                 .map(sessionStateStore::get)
                                 .flatMap(Optional::stream)
@@ -224,7 +224,7 @@ public class OnConnectFlow {
                                         state.currentPosition().y(),
                                         state.direction()
                                 ))
-                                .toList();
+                                .toList());
                     });
 
                     return Mono.empty();

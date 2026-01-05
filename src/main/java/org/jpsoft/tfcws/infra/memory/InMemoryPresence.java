@@ -166,11 +166,11 @@ public class InMemoryPresence implements Presence {
     }
 
     public Set<String> getEntitiesInZone(ChunkCoord chunkCoord) {
-        ConcurrentHashMap<String, Position> playersInZone = playerByChunk.get(chunkCoord.getZoneKey());
-        if (playersInZone != null && !playersInZone.isEmpty()) {
-            return playersInZone.keySet();
+        Set<String> playersInZone = playerByChunk.get(chunkCoord.getZoneKey()).keySet();
+        if (!playersInZone.isEmpty()) {
+            return playersInZone;
         }
-        return Collections.emptySet();
+        return null;
     }
 
     /**
