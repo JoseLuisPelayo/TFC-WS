@@ -9,5 +9,5 @@ public enum MsgType {
     PLAYER_MOVE,
     PLAYER_MOVED,
     PLAYER_LOADED,
-    DESPAWN_ZONES
+    DESPAWN_ENTITIES
 }

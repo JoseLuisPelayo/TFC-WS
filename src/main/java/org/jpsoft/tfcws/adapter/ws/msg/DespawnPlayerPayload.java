@@ -12,6 +12,6 @@ import java.util.Set;
 @Setter
 @AllArgsConstructor
 @NoArgsConstructor
-public class DespawnZonesPayload {
-    private Set<ChunkCoord> zones;
+public class DespawnPlayerPayload {
+    private Set<String> entityIds;
 }

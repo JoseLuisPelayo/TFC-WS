@@ -13,6 +13,7 @@ import lombok.Setter;
 @AllArgsConstructor
 @NoArgsConstructor
 public class SnapShotZonePayload {
-    private String zoneId;
+    private String zoneKey;
     private List<PlayerViewPayload> players;
 }
+

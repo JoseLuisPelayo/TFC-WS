@@ -81,36 +81,37 @@ public class OnMoveFlow {
                                 now
                         ));
 
-                // Enviar snapshot de las nuevas zonas ingresadas
+                        // Enviar snapshot de las nuevas zonas ingresadas
                         changedZones.enteredZones().forEach(zone -> {
-                                    Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
-                                    List<PlayerViewPayload> aux = entitiesInZone.stream().map(
-                                            entityId -> {
-                                                if (!entityId.equals(sessionId)) {
-                                                    Optional<PlayerSessionState> psState = sessionStateStore.get(entityId);
-                                                    if (psState.isPresent()) {
-                                                        PlayerSessionState otherState = psState.get();
-                                                        return new PlayerViewPayload(
-                                                                otherState.playerId(),
-                                                                "nombre_jugador",
-                                                                otherState.currentPosition().x(),
-                                                                otherState.currentPosition().y(),
-                                                                otherState.direction()
-                                                        );
-                                                    }
-                                                }
-                                                return new PlayerViewPayload();
-                                            }
-                                    ).toList();
+                           Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
 
-                                    wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, new SnapShotZonePayload(zone.getZoneKey(), aux));
-                                }
-                        );
+                           List<PlayerViewPayload> players = entitiesInZone.stream()
+                                   .filter(entityId -> !entityId.equals(sessionId))
+                                   .map(sessionStateStore::get)
+                                   .flatMap(Optional::stream)
+                                   .map(state -> new PlayerViewPayload(
+                                             state.playerId(),
+                                             "nombre_jugador",
+                                             state.currentPosition().x(),
+                                             state.currentPosition().y(),
+                                             state.direction()
+                                   ))
+                                   .toList();
+                        });
 
-                        wsMessenger.sendTo(
-                                sessionId,
-                                MsgType.DESPAWN_ZONES,
-                                new DespawnZonesPayload(changedZones.exitedZones()));
+                        changedZones.exitedZones().forEach(zone -> {
+                            Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
+                            wsMessenger.sendTo(
+                                    sessionId,
+                                    MsgType.DESPAWN_ENTITIES,
+                                    new DespawnPlayerPayload(entitiesInZone));
+
+                            entitiesInZone.forEach(entityId ->
+                                    wsMessenger.sendTo(entityId, MsgType.DESPAWN_ENTITIES,
+                                            new DespawnPlayerPayload(Set.of(sessionId)))
+                            );
+                        });
+
                     } else {
                         sessionStateStore.upsert(sessionId, currentState.withPosition(
                                 newPosition,

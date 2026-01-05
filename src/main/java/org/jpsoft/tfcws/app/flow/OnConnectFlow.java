@@ -211,29 +211,21 @@ public class OnConnectFlow {
 
                     // Enviar snapshot de las zonas asignadas
                     zones.forEach(zone -> {
-                                Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
-                                List<PlayerViewPayload> aux = entitiesInZone.stream().map(
-                                        entityId -> {
-                                            if (!entityId.equals(sessionId)) {
-                                                Optional<PlayerSessionState> psState = sessionStateStore.get(entityId);
-                                                if (psState.isPresent()) {
-                                                    PlayerSessionState otherState = psState.get();
-                                                    return new PlayerViewPayload(
-                                                            otherState.playerId(),
-                                                            "nombre_jugador",
-                                                            otherState.currentPosition().x(),
-                                                            otherState.currentPosition().y(),
-                                                            otherState.direction()
-                                                    );
-                                                }
-                                            }
-                                            return new PlayerViewPayload();
-                                        }
-                                ).toList();
+                        Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
 
-                                wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, new SnapShotZonePayload(zone.getZoneKey(), aux));
-                            }
-                    );
+                        List<PlayerViewPayload> players = entitiesInZone.stream()
+                                .filter(entityId -> !entityId.equals(sessionId))
+                                .map(sessionStateStore::get)
+                                .flatMap(Optional::stream)
+                                .map(pState -> new PlayerViewPayload(
+                                        state.playerId(),
+                                        "nombre_jugador",
+                                        state.currentPosition().x(),
+                                        state.currentPosition().y(),
+                                        state.direction()
+                                ))
+                                .toList();
+                    });
 
                     return Mono.empty();
                 })
