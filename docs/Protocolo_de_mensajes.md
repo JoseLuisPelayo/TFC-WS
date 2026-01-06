@@ -22,7 +22,7 @@ type es case-sensitive y debe coincidir exactamente con uno de los valores del e
 - PLAYER_MOVE
 - PLAYER_MOVED
 - PLAYER_LOADED
-- DESPAWN_ZONES
+- DESPAWN_ENTITIES
 
 ### payload:  
 Debe seguir el esquema específico del type.  
@@ -40,7 +40,8 @@ Enviado en el flujo de conexión, contiene el estado inicial del jugador.
     "playerId": 123,
     "playerName": "Hero",
     "x": 10.5,
-    "y": 0.0
+    "y": 0.0,
+    "direction": "SOUTH"
   }
 }
 ```
@@ -80,5 +81,63 @@ Snapshot de un Chunk y las entidades a que hay en ese chunk(de momento solo play
         "playerId": 123,
         "playerName": "Hero",
         "x": 10.5,
-        "y": 0.0
+        "y": 0.0,
+        "direction": "SOUTH"
+        },
+        ...
+      ]
+    }
+}
+```
+#### PLAYER_MOVED  
+Notificación de que un jugador se ha movido en una zona suscrita.
+```json
+{
+"type": "PLAYER_MOVED",
+"payload": {
+    "playerId": 123,
+    "x": 15.0,
+    "y": 0.0,
+    "direction": "EAST"
+  }
+}
+``` 
+
+#### DESPAWN_ENTITIES  
+Notificación de que ciertas entidades han salido de la zona suscrita.
+```json
+{
+"type": "DESPAWN_ENTITIES",
+"payload": {
+    "zoneKey": "0:0",
+    "entityIds": [123, 456, 789]
+  }
+}
+```
+#### PLAYER_LOADED  
+Notificación de que un jugador ha cargado en el AOI.
+```json
+{"type": "PLAYER_LOADED",
+"payload": {
+    "playerId": 123,
+    "playerName": "Hero",
+    "x": 10.5,
+    "y": 0.0,
+    "direction": "SOUTH"
+  }
+}
+```
+
+### Cliente → Servidor
+#### PLAYER_MOVE  
+Notificación de que el jugador se ha movido.
+```json
+{
+"type": "PLAYER_MOVE",
+"payload": {
+    "x": 15.0,
+    "y": 0.0,
+    "direction": "EAST"
+  }
+}```
 
