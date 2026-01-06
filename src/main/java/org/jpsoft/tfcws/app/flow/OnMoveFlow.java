@@ -37,7 +37,6 @@ public class OnMoveFlow {
     private final SessionRegistry sessionRegistry;
     private final WsMessenger wsMessenger;
 
-
     public Mono<Void> run(WebSocketSession session, Flux<Envelope> bus) {
 
         String playerId = session.getId();
@@ -52,8 +51,10 @@ public class OnMoveFlow {
                     } catch (JsonProcessingException e) {
                         wsMessenger.sendTo(sessionId, MsgType.ERROR,
                                 new ErrorPayload(ErrorCode.BAD_MOVE.name(), e.getMessage()));
+                        log.error("Failed to parse PlayerMovePayload for sessionId: {}", sessionId, e);
                         return Mono.empty();
                     }
+                    // Actualizar la posicion del jugador
                     Position newPosition = new Position(payload.getX(), payload.getY());
                     ChunkCoord activeChunk = ChunkGeometry.posToChunk(newPosition);
                     long now = System.currentTimeMillis();
@@ -62,11 +63,30 @@ public class OnMoveFlow {
                     if (opt.isEmpty()) {
                         wsMessenger.sendTo(sessionId, MsgType.ERROR,
                                 new ErrorPayload(ErrorCode.BAD_STATE.name(), ErrorCode.BAD_STATE.defaultMessage()));
+
+                        log.error("No session state found for sessionId: {}", sessionId);
                         return Mono.empty();
                     }
                     EntityState currentState = opt.get();
 
                     presence.upsertPresence(playerId, newPosition);
+
+                    wsMessenger.broadcastToZone(
+                            activeChunk,
+                            MsgType.PLAYER_MOVED,
+                            new PlayerMovedPayload(
+                                    playerId,
+                                    newPosition.x(),
+                                    newPosition.y(),
+                                    payload.getDirection(),
+                                    now
+                            ));
+
+                    sessionStateStore.upsert(sessionId, currentState.withPosition(
+                            newPosition,
+                            payload.getDirection(),
+                            now
+                    ));
 
                     if (!currentState.currentChunk().equals(activeChunk)) {
                         AoiSwapResult changedZones = sessionRegistry.swapAoiZones(
@@ -82,27 +102,38 @@ public class OnMoveFlow {
                                 now
                         ));
 
-                        // Enviar snapshot de las nuevas zonas ingresadas
                         changedZones.enteredZones().forEach(zone -> {
                             Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
                             HashMap<String, EntityState> states = sessionStateStore.getAllSessions(entitiesInZone);
 
-                            wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, new SnapShotZonePayload(zone.getZoneKey(), entitiesInZone.stream()
-                                    .filter(entityId -> !entityId.equals(sessionId))
-                                    .map(id -> {
-                                        EntityState state = states.get(id);
-                                        return new PlayerViewPayload(
-                                                state.playerId(),
-                                                "nombre_jugador",
-                                                state.currentPosition().x(),
-                                                state.currentPosition().y(),
-                                                state.direction());
-                                    }).toList()));
+                            var players = entitiesInZone.stream()
+                                    .filter(id -> !id.equals(sessionId))
+                                    .map(states::get)
+                                    .filter(java.util.Objects::nonNull)
+                                    .map(state -> new PlayerViewPayload(
+                                            state.playerId(),
+                                            "nombre_jugador",
+                                            state.currentPosition().x(),
+                                            state.currentPosition().y(),
+                                            state.direction()
+                                    ))
+                                    .toList();
+
+                            if (!players.isEmpty()) {
+                                wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE,
+                                        new SnapShotZonePayload(zone.getZoneKey(), players));
+                            }
                         });
 
+                        // 1) Despawn al jugador que salio de las zonas
                         changedZones.exitedZones().forEach(zone -> {
                             Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
-                            wsMessenger.sendTo(sessionId, MsgType.DESPAWN_ENTITIES, new DespawnPlayerPayload(entitiesInZone));
+                            if (!entitiesInZone.isEmpty())
+                                wsMessenger.sendTo(
+                                        sessionId,
+                                        MsgType.DESPAWN_ENTITIES,
+                                        new DespawnPlayerPayload(entitiesInZone)
+                                );
                         });
 
                         // 2) Despawn a los demas jugadores que salieron de las zonas
@@ -111,34 +142,16 @@ public class OnMoveFlow {
                                 .filter(w -> !w.equals(sessionId))
                                 .collect(Collectors.toSet());
 
-                        watchers.forEach(watcherSession ->
-                                wsMessenger.sendTo(watcherSession, MsgType.DESPAWN_ENTITIES, new DespawnPlayerPayload(Set.of(playerId)))
-                        );
-
-                    } else {
-                        sessionStateStore.upsert(sessionId, currentState.withPosition(
-                                newPosition,
-                                payload.getDirection(),
-                                now
-                        ));
-
-                        log.info("Session {} moved to position: {}", sessionId, newPosition);
+                        if (!watchers.isEmpty()) {
+                            watchers.forEach(watcherSession ->
+                                    wsMessenger.sendTo(watcherSession, MsgType.DESPAWN_ENTITIES, new DespawnPlayerPayload(Set.of(playerId)))
+                            );
+                        }
                     }
-
-                    wsMessenger.broadcastToZone(
-                            activeChunk,
-                            MsgType.PLAYER_MOVED,
-                            new PlayerMovedPayload(
-                                    playerId,
-                                    newPosition.x(),
-                                    newPosition.y(),
-                                    now
-                            ));
-
 
                     return Mono.empty();
                 })
+
                 .then();
     }
-
 }

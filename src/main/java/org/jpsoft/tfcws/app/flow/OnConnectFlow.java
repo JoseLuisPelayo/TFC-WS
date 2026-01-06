@@ -46,11 +46,6 @@ import java.util.Set;
  * - Entrada: `WebSocketSession` (meta de sesión) y `Flux<Envelope>` (mensajes entrantes desde cliente).
  * - Salida: `Flux<WebSocketMessage>` (mensajes que deben ser enviados al cliente inmediatamente tras conectar).
  * <p>
- * Mecanismo de error y tolerancia:
- * - Se aplica un timeout configurable (JOIN_TIMEOUT). Si el mensaje JOIN no llega a tiempo
- * o no puede parsearse, se hace fallback a la posición (0,0) y el proceso continúa.
- * - Los errores derivados del parseo del payload se manejan con logs y fallback; no se propagan
- * hacia el cliente en esta etapa.
  * <p>
  * Notas de diseño:
  * - Basado en Reactor (Flux/Mono) para no bloquear el hilo que atiende la conexión.
@@ -125,17 +120,8 @@ public class OnConnectFlow {
         final String sessionId = session.getId();
         final InetSocketAddress remoteAddress = session.getHandshakeInfo().getRemoteAddress();
 
-        // -----------------------------
-        // 1) Obtener posición inicial
-        // -----------------------------
-        // Comentarios inline sobre el pipeline reactivo:
-        // - filter(envelope -> envelope.getType() == MsgType.JOIN): dejamos solo mensajes JOIN
-        // - next(): transformamos el Flux en Mono que emite solamente la primera coincidencia
-        // - timeout(JOIN_TIMEOUT): si no llega, Reactor lanza un TimeoutException
-        // - flatMap(... parseo ...): parseamos el payload JSON a JoinPayload; si falla, devolvemos Mono.error
-        // - switchIfEmpty(...): si no hubo ningún JOIN, aplicamos fallback (0,0)
-        // - onErrorResume(...): capturamos errores (timeout, parseo) y también aplicamos fallback (0,0)
-
+        /*De momento usamos el fallback y ponemos los personajes en 0.0 cuando tengamos base de
+        datos la posicion inicial vendra de base e datos*/
         return bus
                 .filter(envelope -> envelope.getType() == MsgType.JOIN)
                 .next()
@@ -181,7 +167,7 @@ public class OnConnectFlow {
                     // Guardar estado inicial de la sesión
                     sessionStateStore.upsert(sessionId, state);
 
-                    // Efectos secundarios: registrar la sesión en el registry y la presencia del jugador
+                    // Guardamos la sesión en el registro de sesiones y la presencia en el mundo
                     sessionRegistry.addSessionsToZones(sessionId, zones);
                     presence.upsertPresence(sessionId, pos);
 
@@ -198,6 +184,7 @@ public class OnConnectFlow {
                     ));
 
                     // Notificar a otros jugadores en la misma zona que este jugador ha cargado
+                    //TODO buscar la manera de filtrar a self
                     wsMessenger.broadcastToZone(chunkCoord, MsgType.PLAYER_LOADED, new PlayerViewPayload(
                             sessionId,
                             "nombre_jugador",
@@ -206,10 +193,11 @@ public class OnConnectFlow {
                             state.direction()));
 
                     // Construir el mensaje SUBSCRIBED (respuesta inmediata al cliente)
+                    //Creo que luego podemos darle oro uso a este mensaje de momento lo pusimos para debuguear
                     wsMessenger.sendTo(sessionId, MsgType.SUBSCRIBED, new SubscribedPayload(zones));
 
                     log.info("connect_snapshots_start sessionId={} zones={}", sessionId, zones.size());
-                    // Enviar snapshot de las zonas asignadas
+                    // Enviar snapshot de las zonas asignadas si hay otras entidades presentes
                     zones.forEach(zone -> {
                         Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
 
@@ -231,28 +219,6 @@ public class OnConnectFlow {
                                     new SnapShotZonePayload(zone.getZoneKey(), players));
                         }
                     });
-
-                    /*zones.forEach(zone -> {
-                        Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
-                        if (entitiesInZone.isEmpty()) {
-                            log.info("Snapshot_zone_empty -> sessionId={}, zone={}", sessionId, zone.getZoneKey());
-                        }
-                        log.info("connect_snapshot_zone sessionId={} zone={} entities={}",
-                                sessionId, zone.getZoneKey(), entitiesInZone);
-
-                        wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, new SnapShotZonePayload(zone.getZoneKey(), entitiesInZone.stream()
-                                .filter(entityId -> !entityId.equals(sessionId))
-                                .map(sessionStateStore::get)
-                                .flatMap(Optional::stream)
-                                .map(pState -> new PlayerViewPayload(
-                                        pState.playerId(),
-                                        "nombre_jugador",
-                                        pState.currentPosition().x(),
-                                        pState.currentPosition().y(),
-                                        pState.direction()
-                                ))
-                                .toList()));
-                    });*/
 
                     return Mono.empty();
                 })

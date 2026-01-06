@@ -30,10 +30,11 @@ public class InMemorySessionStateStore implements SessionStateStore {
     }
 
     public HashMap<String, EntityState> getAllSessions(Set<String> ids) {
-        return ids.stream()
-                .filter(storeById::containsKey)
-                .collect(HashMap::new,
-                        (map, id) -> map.put(id, storeById.get(id)),
-                        HashMap::putAll);
+        HashMap<String, EntityState> result = new HashMap<>();
+        for (String id : ids) {
+            EntityState s = storeById.get(id);
+            if (s != null) result.put(id, s);
+        }
+        return result;
     }
 }
