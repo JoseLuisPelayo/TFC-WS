@@ -1,29 +1,40 @@
 package org.jpsoft.tfcws.infra.memory;
 
 import org.jpsoft.tfcws.app.port.SessionStateStore;
-import org.jpsoft.tfcws.domain.session.PlayerSessionState;
+import org.jpsoft.tfcws.domain.actor.EntityState;
 
+import java.util.HashMap;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 public class InMemorySessionStateStore implements SessionStateStore {
 
-    private final ConcurrentMap<String, PlayerSessionState> storeBySession = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, EntityState> storeById = new ConcurrentHashMap<>();
 
     @Override
-    public Optional<PlayerSessionState> get(String sessionId) {
-        return Optional.ofNullable(storeBySession.get(sessionId));
+    public Optional<EntityState> get(String id) {
+        return Optional.ofNullable(storeById.get(id));
     }
 
     @Override
-    public PlayerSessionState upsert(String sessionId, PlayerSessionState state) {
-        storeBySession.put(sessionId, state);
+    public EntityState upsert(String id, EntityState state) {
+        storeById.put(id, state);
         return state;
     }
 
     @Override
-    public void remove(String sessionId) {
-        storeBySession.remove(sessionId);
+    public void remove(String id) {
+        storeById.remove(id);
+    }
+
+    public HashMap<String, EntityState> getAllSessions(Set<String> ids) {
+        HashMap<String, EntityState> result = new HashMap<>();
+        for (String id : ids) {
+            EntityState s = storeById.get(id);
+            if (s != null) result.put(id, s);
+        }
+        return result;
     }
 }

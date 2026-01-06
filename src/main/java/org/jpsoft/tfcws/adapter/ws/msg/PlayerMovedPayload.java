@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.jpsoft.tfcws.domain.actor.Direction;
 
 @Getter
 @Setter
@@ -13,5 +14,6 @@ public class PlayerMovedPayload {
     private String playerId;
     private double x;
     private double y;
+    private Direction direction;
     private Long timestamp;
 }

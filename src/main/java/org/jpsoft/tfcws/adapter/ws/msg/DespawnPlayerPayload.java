@@ -4,7 +4,6 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.jpsoft.tfcws.domain.world.ChunkCoord;
 
 import java.util.Set;
 
@@ -12,6 +11,6 @@ import java.util.Set;
 @Setter
 @AllArgsConstructor
 @NoArgsConstructor
-public class DespawnZonesPayload {
-    private Set<ChunkCoord> zones;
+public class DespawnPlayerPayload {
+    private Set<String> entityIds;
 }

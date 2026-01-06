@@ -2,10 +2,9 @@ package org.jpsoft.tfcws.app.port;
 
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
-import org.jpsoft.tfcws.adapter.ws.msg.SnapShotZonePayload;
 
-import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Contrato para la gestión de presencias de sesiones en el mundo.
@@ -56,16 +55,6 @@ public interface Presence {
      */
     void removePresence(String sessionId);
 
-    /**
-     * Construye y devuelve los payloads de snapshot de las zonas indicadas para la sesión.
-     *
-     * <p>El resultado representa el estado relevante de cada {@code ChunkCoord}
-     * necesario para sincronizar la vista del cliente asociado a {@code sessionId}.</p>
-     *
-     * @param sessionId identificador de la sesión que solicita el snapshot; no puede ser {@code null}
-     * @param zones     conjunto de coordenadas de zona (chunks) para incluir en el snapshot; no puede ser {@code null}
-     * @return lista de {@link SnapShotZonePayload} que representan el estado de cada zona; nunca {@code null} (puede ser vacía)
-     * @throws IllegalArgumentException si {@code sessionId} o {@code zones} son {@code null}
-     */
-    List<SnapShotZonePayload> buildSnapShotZone(String sessionId, Set<ChunkCoord> zones);
+    // Devuelve un conjunto con los IDs de las entidades presentes en la zona indicada
+    Set<String> getEntitiesInZone(ChunkCoord chunkCoord);
 }
