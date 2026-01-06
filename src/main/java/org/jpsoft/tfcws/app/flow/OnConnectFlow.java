@@ -208,23 +208,51 @@ public class OnConnectFlow {
                     // Construir el mensaje SUBSCRIBED (respuesta inmediata al cliente)
                     wsMessenger.sendTo(sessionId, MsgType.SUBSCRIBED, new SubscribedPayload(zones));
 
+                    log.info("connect_snapshots_start sessionId={} zones={}", sessionId, zones.size());
                     // Enviar snapshot de las zonas asignadas
                     zones.forEach(zone -> {
                         Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
 
-                        wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, entitiesInZone.stream()
+                        var players = entitiesInZone.stream()
                                 .filter(entityId -> !entityId.equals(sessionId))
                                 .map(sessionStateStore::get)
                                 .flatMap(Optional::stream)
                                 .map(pState -> new PlayerViewPayload(
-                                        state.playerId(),
+                                        pState.playerId(),
                                         "nombre_jugador",
-                                        state.currentPosition().x(),
-                                        state.currentPosition().y(),
-                                        state.direction()
+                                        pState.currentPosition().x(),
+                                        pState.currentPosition().y(),
+                                        pState.direction()
                                 ))
-                                .toList());
+                                .toList();
+
+                        if (!players.isEmpty()) {
+                            wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE,
+                                    new SnapShotZonePayload(zone.getZoneKey(), players));
+                        }
                     });
+
+                    /*zones.forEach(zone -> {
+                        Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
+                        if (entitiesInZone.isEmpty()) {
+                            log.info("Snapshot_zone_empty -> sessionId={}, zone={}", sessionId, zone.getZoneKey());
+                        }
+                        log.info("connect_snapshot_zone sessionId={} zone={} entities={}",
+                                sessionId, zone.getZoneKey(), entitiesInZone);
+
+                        wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE, new SnapShotZonePayload(zone.getZoneKey(), entitiesInZone.stream()
+                                .filter(entityId -> !entityId.equals(sessionId))
+                                .map(sessionStateStore::get)
+                                .flatMap(Optional::stream)
+                                .map(pState -> new PlayerViewPayload(
+                                        pState.playerId(),
+                                        "nombre_jugador",
+                                        pState.currentPosition().x(),
+                                        pState.currentPosition().y(),
+                                        pState.direction()
+                                ))
+                                .toList()));
+                    });*/
 
                     return Mono.empty();
                 })

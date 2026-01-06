@@ -164,12 +164,15 @@ public class WsHandler implements WebSocketHandler {
         // Outbound: concatenamos el mensaje de conexión inicial, los echos y los pings de heartbeat.
         Flux<WebSocketMessage> outbound = Flux.merge(hubMessages, heartbeat);
 
-        Mono<Void> inboundDone = inboundText.then();
+//        Mono<Void> processing = Mono.when(moveWork, connectWork);
+        Mono<Void> processing = Mono.whenDelayError(connectWork, moveWork)
+                .doOnError(e -> log.error("processing_failed sessionId={}", id, e))
+                .onErrorResume(e -> Mono.empty());
 
         // Envía el outbound y espera la finalización del inbound.
         // En doFinally se realiza la limpieza del registro de sesiones y el log.
         return session.send(outbound)
-                .and(Mono.when(inboundDone, moveWork, connectWork))
+                .and(processing)
                 .doFinally(s -> {
 
                     outboundHub.unregister(id);
