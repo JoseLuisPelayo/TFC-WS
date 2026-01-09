@@ -54,7 +54,7 @@ services:
       # los oculte para produccion me podre conectar desde
       # adminer y el resto de contenedores de la red pero no desde afuera
     ports:
-      - "5433:5432" # quitar en produccion para no poder conectar desde fuera de la red
+      - "5434:5432" # quitar en produccion para no poder conectar desde fuera de la red
 
 
   adminer:
