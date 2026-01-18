@@ -1,14 +1,9 @@
 package org.jpsoft.tfcws.config;
 
 import org.jpsoft.tfcws.adapter.ws.WsHandler;
-import org.jpsoft.tfcws.app.port.OutboundHub;
-import org.jpsoft.tfcws.app.port.Presence;
-import org.jpsoft.tfcws.app.port.SessionRegistry;
-import org.jpsoft.tfcws.app.port.SessionStateStore;
-import org.jpsoft.tfcws.infra.memory.InMemoryOutboundHub;
-import org.jpsoft.tfcws.infra.memory.InMemoryPresence;
-import org.jpsoft.tfcws.infra.memory.InMemorySessionRegistry;
-import org.jpsoft.tfcws.infra.memory.InMemorySessionStateStore;
+import org.jpsoft.tfcws.app.port.*;
+import org.jpsoft.tfcws.domain.actor.SessionState;
+import org.jpsoft.tfcws.infra.memory.*;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.HandlerMapping;
@@ -59,8 +54,8 @@ public class WsConfig {
     }
 
     @Bean
-    public SessionStateStore sessionStateStore() {
-        return new InMemorySessionStateStore();
+    public EntityStateStore sessionStateStore() {
+        return new InMemoryEntityStateStore();
     }
 
     @Bean
@@ -76,6 +71,11 @@ public class WsConfig {
     @Bean
     public OutboundHub outboundHub() {
         return new InMemoryOutboundHub();
+    }
+
+    @Bean
+    public SessionStateStore sessionStateStoreStore() {
+        return new InMemorySessionStateStore();
     }
 
 

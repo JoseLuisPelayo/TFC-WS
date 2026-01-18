@@ -7,7 +7,7 @@ import org.jpsoft.tfcws.adapter.ws.MsgCodec;
 import org.jpsoft.tfcws.adapter.ws.msg.*;
 import org.jpsoft.tfcws.app.port.Presence;
 import org.jpsoft.tfcws.app.port.SessionRegistry;
-import org.jpsoft.tfcws.app.port.SessionStateStore;
+import org.jpsoft.tfcws.app.port.EntityStateStore;
 import org.jpsoft.tfcws.app.port.WsMessenger;
 import org.jpsoft.tfcws.app.port.dto.AoiSwapResult;
 import org.jpsoft.tfcws.domain.actor.EntityState;
@@ -24,6 +24,7 @@ import reactor.core.publisher.Mono;
 import java.util.HashMap;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -33,13 +34,12 @@ public class OnMoveFlow {
 
     private final MsgCodec codec;
     private final Presence presence;
-    private final SessionStateStore sessionStateStore;
+    private final EntityStateStore entityStateStore;
     private final SessionRegistry sessionRegistry;
     private final WsMessenger wsMessenger;
 
     public Mono<Void> run(WebSocketSession session, Flux<Envelope> bus) {
 
-        String playerId = session.getId();
         String sessionId = session.getId();
 
         return bus
@@ -54,11 +54,15 @@ public class OnMoveFlow {
                         log.error("Failed to parse PlayerMovePayload for sessionId: {}", sessionId, e);
                         return Mono.empty();
                     }
+
+                    log.info("Received move payload from sessionId {}: x={}, y={}, direction={}",
+                            sessionId, payload.getX(), payload.getY(), payload.getDirection());
+
                     // Actualizar la posicion del jugador
                     Position newPosition = new Position(payload.getX(), payload.getY());
                     ChunkCoord activeChunk = ChunkGeometry.posToChunk(newPosition);
                     long now = System.currentTimeMillis();
-                    Optional<EntityState> opt = sessionStateStore.get(sessionId);
+                    Optional<EntityState> opt = entityStateStore.get(payload.getPlayerId());
 
                     if (opt.isEmpty()) {
                         wsMessenger.sendTo(sessionId, MsgType.ERROR,
@@ -69,20 +73,20 @@ public class OnMoveFlow {
                     }
                     EntityState currentState = opt.get();
 
-                    presence.upsertPresence(playerId, newPosition);
+                    presence.upsertPresence(currentState.playerId(), newPosition);
 
                     wsMessenger.broadcastToZone(
                             activeChunk,
                             MsgType.PLAYER_MOVED,
                             new PlayerMovedPayload(
-                                    playerId,
+                                    currentState.playerId(),
                                     newPosition.x(),
                                     newPosition.y(),
                                     payload.getDirection(),
                                     now
                             ));
 
-                    sessionStateStore.upsert(sessionId, currentState.withPosition(
+                    entityStateStore.upsert(currentState.playerId(), currentState.withPosition(
                             newPosition,
                             payload.getDirection(),
                             now
@@ -94,7 +98,7 @@ public class OnMoveFlow {
                                 activeChunk
                         );
 
-                        sessionStateStore.upsert(sessionId, currentState.withChunkAndAoi(
+                        entityStateStore.upsert(currentState.playerId(), currentState.withChunkAndAoi(
                                 activeChunk,
                                 ChunkGeometry.getChunksInAOI(activeChunk),
                                 newPosition,
@@ -103,11 +107,11 @@ public class OnMoveFlow {
                         ));
 
                         changedZones.enteredZones().forEach(zone -> {
-                            Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
-                            HashMap<String, EntityState> states = sessionStateStore.getAllSessions(entitiesInZone);
+                            Set<UUID> entitiesInZone = presence.getEntitiesInZone(zone);
+                            HashMap<UUID, EntityState> states = entityStateStore.getAllSessions(entitiesInZone);
 
                             var players = entitiesInZone.stream()
-                                    .filter(id -> !id.equals(sessionId))
+                                    .filter(id -> !id.equals(currentState.playerId()))
                                     .map(states::get)
                                     .filter(java.util.Objects::nonNull)
                                     .map(state -> new PlayerViewPayload(
@@ -127,7 +131,7 @@ public class OnMoveFlow {
 
                         // 1) Despawn al jugador que salio de las zonas
                         changedZones.exitedZones().forEach(zone -> {
-                            Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
+                            Set<UUID> entitiesInZone = presence.getEntitiesInZone(zone);
                             if (!entitiesInZone.isEmpty())
                                 wsMessenger.sendTo(
                                         sessionId,
@@ -144,7 +148,7 @@ public class OnMoveFlow {
 
                         if (!watchers.isEmpty()) {
                             watchers.forEach(watcherSession ->
-                                    wsMessenger.sendTo(watcherSession, MsgType.DESPAWN_ENTITIES, new DespawnPlayerPayload(Set.of(playerId)))
+                                    wsMessenger.sendTo(watcherSession, MsgType.DESPAWN_ENTITIES, new DespawnPlayerPayload(Set.of(currentState.playerId())))
                             );
                         }
                     }

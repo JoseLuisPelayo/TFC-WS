@@ -3,12 +3,12 @@ package org.jpsoft.tfcws.app.flow;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.RequiredArgsConstructor;
 import org.jpsoft.tfcws.adapter.ws.msg.*;
-import org.jpsoft.tfcws.app.port.Presence;
-import org.jpsoft.tfcws.app.port.SessionRegistry;
-import org.jpsoft.tfcws.app.port.SessionStateStore;
-import org.jpsoft.tfcws.app.port.WsMessenger;
+import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorPayload;
+import org.jpsoft.tfcws.app.port.*;
+import org.jpsoft.tfcws.app.service.PlayerService;
 import org.jpsoft.tfcws.domain.actor.Direction;
 import org.jpsoft.tfcws.domain.actor.EntityState;
+import org.jpsoft.tfcws.domain.actor.SessionState;
 import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.domain.world.ChunkGeometry;
@@ -24,6 +24,7 @@ import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * OnConnectFlow
@@ -68,7 +69,15 @@ public class OnConnectFlow {
     /**
      * Almacenamiento del estado de la sesión.
      */
+    private final EntityStateStore entityStateStore;
+    /**
+     * Almacenamiento de identidad de sesión (sessionId -> userId).
+     */
     private final SessionStateStore sessionStateStore;
+    /**
+     * Servicio de gestión de personajes.
+     */
+    private final PlayerService playerService;
     /**
      * Codec para convertir objetos a mensajes WebSocket.
      */
@@ -83,7 +92,7 @@ public class OnConnectFlow {
      * Tiempo máximo que se espera por el mensaje "join" inicial recibido desde el cliente.
      * Si no llega en este tiempo, se usa una posición por defecto (0,0).
      */
-    private final Duration JOIN_TIMEOUT = Duration.ofSeconds(5);
+    private final Duration JOIN_TIMEOUT = Duration.ofSeconds(300);
 
     /**
      * Ejecuta el flujo de conexión para una sesión WebSocket.
@@ -128,99 +137,132 @@ public class OnConnectFlow {
                 .timeout(JOIN_TIMEOUT)
                 .flatMap(
                         envelope -> {
+                            JoinPayload joinPayload;
+
+                            Optional<SessionState> sessionState = sessionStateStore.getSessionState(sessionId);
+
+                            UUID userId = sessionState.map(SessionState::getUserId).orElse(null);
+
+                            if (userId == null) {
+                                // La sesión no está autenticada; no permitimos continuar con el flujo de conexión.
+                                log.warn("Unauthenticated_session -> sessionId={}, remoteAddress={}", sessionId, remoteAddress);
+                                wsMessenger.sendTo(sessionId, MsgType.ERROR, new ErrorPayload("UNAUTHENTICATED", "Session is not authenticated"));
+                                return Mono.empty();
+                            }
+
                             try {
-                                JoinPayload joinPayload = codec.parsePayload(envelope, JoinPayload.class);
-                                return Mono.just(new Position(joinPayload.getX(), joinPayload.getY()));
+                                joinPayload = codec.parsePayload(envelope, JoinPayload.class);
+                                String playerName = joinPayload.getPlayerName();
+
+                                return playerService.getOrCreatePlayer(userId, playerName)
+                                        .flatMap(player -> {
+                                            //Bloqueamos aqui porque necesitamos el player para continuar ;
+                                            //Comprobar que no es null
+                                            // aqui tengo el player
+                                            // si no tiene ultima posicion pues 0,0
+                                            log.info("Player_lookup -> userId={}, playerName={}, playerPos=({},{})",
+                                                    userId, playerName,
+                                                    player.getLastXPosition(),
+                                                    player.getLastYPosition()
+                                            );
+
+
+                                            Position pos = new Position(
+                                                    player.getLastXPosition(),
+                                                    player.getLastYPosition()
+                                            );
+
+                                            log.info("Player_found -> playerId={}, playerName={}, position=({},{})",
+                                                    player.getId(), playerName, pos.x(), pos.y());
+
+                                            ChunkCoord chunkCoord = ChunkGeometry.posToChunk(pos);
+                                            Set<ChunkCoord> zones = ChunkGeometry.getChunksInAOI(chunkCoord);
+                                            // guardar estado de la sesion con la posicion del player
+
+                                            EntityState state = new EntityState(
+                                                    player.getId(),
+                                                    zones,
+                                                    pos,
+                                                    chunkCoord,
+                                                    Direction.SOUTH,
+                                                    System.currentTimeMillis(),
+                                                    System.currentTimeMillis());
+
+                                            // Guardar estado inicial de la sesión
+                                            entityStateStore.upsert(player.getId(), state);
+                                            // guardar presencia con la posicion del player
+                                            presence.upsertPresence(player.getId(), pos);
+                                            // guardar en session registry
+                                            sessionRegistry.addSessionsToZones(sessionId, zones);
+                                            sessionStateStore.bind(sessionId,
+                                                    SessionState.builder()
+                                                            .userId(userId)
+                                                            .playerId(player.getId())
+                                                            .build()
+                                            );
+
+                                            log.info("Session_joined -> sessionId={}, remoteAddress={}, position=({},{}), chunk=({},{}), zones={}",
+                                                    sessionId, remoteAddress, pos.x(), pos.y(), chunkCoord.cx(), chunkCoord.cy(), zones);
+                                            // tengo que enviar el initial state con el id del player y su ultima posicion
+                                            // Notificar al jugador que su estado inicial está listo
+                                            wsMessenger.sendTo(sessionId, MsgType.INITIAL_STATE, new PlayerViewPayload(
+                                                    player.getId(),
+                                                    "nombre_jugador",
+                                                    state.currentPosition().x(),
+                                                    state.currentPosition().y(),
+                                                    state.direction()
+                                            ));
+
+                                            // enviar snapshot zone a los demas
+                                            // Notificar a otros jugadores en la misma zona que este jugador ha cargado
+                                            //TODO buscar la manera de filtrar a self
+                                            wsMessenger.broadcastToZone(chunkCoord, MsgType.PLAYER_LOADED, new PlayerViewPayload(
+                                                    player.getId(),
+                                                    "nombre_jugador",
+                                                    state.currentPosition().x(),
+                                                    state.currentPosition().y(),
+                                                    state.direction()));
+
+                                            // Construir el mensaje SUBSCRIBED (respuesta inmediata al cliente)
+                                            //Creo que luego podemos darle oro uso a este mensaje de momento lo pusimos para debuguear
+                                            //wsMessenger.sendTo(sessionId, MsgType.SUBSCRIBED, new SubscribedPayload(zones));
+
+                                            // Enviar snapshot de las zonas asignadas si hay otras entidades presentes
+                                            zones.forEach(zone -> {
+                                                Set<UUID> entitiesInZone = presence.getEntitiesInZone(zone);
+
+                                                var players = entitiesInZone.stream()
+                                                        .filter(entityId -> !entityId.equals(player.getId()))
+                                                        .map(entityStateStore::get)
+                                                        .flatMap(Optional::stream)
+                                                        .map(pState -> new PlayerViewPayload(
+                                                                pState.playerId(),
+                                                                "nombre_jugador",
+                                                                pState.currentPosition().x(),
+                                                                pState.currentPosition().y(),
+                                                                pState.direction()
+                                                        ))
+                                                        .toList();
+
+                                                if (!players.isEmpty()) {
+                                                    wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE,
+                                                            new SnapShotZonePayload(zone.getZoneKey(), players));
+                                                }
+                                            });
+                                            return Mono.empty();
+                                        });
+
                             } catch (JsonProcessingException e) {
-                                // Si el payload no es JSON válido para JoinPayload, propagamos error
+                                wsMessenger.sendTo(sessionId, MsgType.ERROR, new ErrorPayload("BAD_JSON", "Invalid Join Payload"));
                                 return Mono.error(e);
                             }
                         })
-                .switchIfEmpty(
-                        Mono.defer(() -> {
-                            // No hubo JOIN en el flujo: fallback a (0,0)
-                            log.error("Join_no_message_received -> fallback_position to (0,0) for sessionId={}, remoteAddress={}",
-                                    sessionId, remoteAddress);
-                            return Mono.just(new Position(0.0, 0.0));
-                        })
-                )
                 .onErrorResume(ex -> {
                     // Timeout o parseo inválido: registramos y devolvemos posición por defecto
-                    log.error("Join_timeout_or_invalid_message -> fallback_position to (0,0) for sessionId={}, remoteAddress={} cause: {}",
-                            sessionId, remoteAddress, ex.getMessage());
-                    return Mono.just(new Position(0.0, 0.0));
-                }).flatMap(pos -> {
-
-                    // Calcular el chunk que contiene la posición y las zonas de AOI (necesarias para suscripción)
-                    ChunkCoord chunkCoord = ChunkGeometry.posToChunk(pos);
-                    Set<ChunkCoord> zones = ChunkGeometry.getChunksInAOI(chunkCoord);
-
-                    EntityState state = new EntityState(
-                            sessionId,
-                            zones,
-                            pos,
-                            chunkCoord,
-                            Direction.SOUTH,
-                            System.currentTimeMillis(),
-                            System.currentTimeMillis());
-
-                    // Guardar estado inicial de la sesión
-                    sessionStateStore.upsert(sessionId, state);
-
-                    // Guardamos la sesión en el registro de sesiones y la presencia en el mundo
-                    sessionRegistry.addSessionsToZones(sessionId, zones);
-                    presence.upsertPresence(sessionId, pos);
-
-                    log.info("Session_joined -> sessionId={}, remoteAddress={}, position=({},{}), chunk=({},{}), zones={}",
-                            sessionId, remoteAddress, pos.x(), pos.y(), chunkCoord.cx(), chunkCoord.cy(), zones);
-
-                    // Notificar al jugador que su estado inicial está listo
-                    wsMessenger.sendTo(sessionId, MsgType.INITIAL_STATE, new PlayerViewPayload(
-                            sessionId,
-                            "nombre_jugador",
-                            state.currentPosition().x(),
-                            state.currentPosition().y(),
-                            state.direction()
-                    ));
-
-                    // Notificar a otros jugadores en la misma zona que este jugador ha cargado
-                    //TODO buscar la manera de filtrar a self
-                    wsMessenger.broadcastToZone(chunkCoord, MsgType.PLAYER_LOADED, new PlayerViewPayload(
-                            sessionId,
-                            "nombre_jugador",
-                            state.currentPosition().x(),
-                            state.currentPosition().y(),
-                            state.direction()));
-
-                    // Construir el mensaje SUBSCRIBED (respuesta inmediata al cliente)
-                    //Creo que luego podemos darle oro uso a este mensaje de momento lo pusimos para debuguear
-                    wsMessenger.sendTo(sessionId, MsgType.SUBSCRIBED, new SubscribedPayload(zones));
-
-                    log.info("connect_snapshots_start sessionId={} zones={}", sessionId, zones.size());
-                    // Enviar snapshot de las zonas asignadas si hay otras entidades presentes
-                    zones.forEach(zone -> {
-                        Set<String> entitiesInZone = presence.getEntitiesInZone(zone);
-
-                        var players = entitiesInZone.stream()
-                                .filter(entityId -> !entityId.equals(sessionId))
-                                .map(sessionStateStore::get)
-                                .flatMap(Optional::stream)
-                                .map(pState -> new PlayerViewPayload(
-                                        pState.playerId(),
-                                        "nombre_jugador",
-                                        pState.currentPosition().x(),
-                                        pState.currentPosition().y(),
-                                        pState.direction()
-                                ))
-                                .toList();
-
-                        if (!players.isEmpty()) {
-                            wsMessenger.sendTo(sessionId, MsgType.SNAPSHOT_ZONE,
-                                    new SnapShotZonePayload(zone.getZoneKey(), players));
-                        }
-                    });
-
-                    return Mono.empty();
+                    wsMessenger.sendTo(sessionId, MsgType.ERROR, new ErrorPayload("BAD_JSON", "Invalid Join Payload or Timeout"));
+                    log.warn("Join_handling_failed -> sessionId={}, remoteAddress={}, error={}", sessionId, remoteAddress, ex.getMessage());
+                    // Desconectamos al cliente
+                    return session.close().then();
                 })
                 .then();
     }

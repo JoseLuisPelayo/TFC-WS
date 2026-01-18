@@ -6,12 +6,14 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.jpsoft.tfcws.domain.actor.Direction;
 
+import java.util.UUID;
+
 @Getter
 @Setter
 @AllArgsConstructor
 @NoArgsConstructor
 public class PlayerViewPayload {
-    private String playerId;
+    private UUID playerId;
     private String playerName;
     private double x;
     private double y;

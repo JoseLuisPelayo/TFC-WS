@@ -8,8 +8,8 @@ import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 
-@Service
 @RequiredArgsConstructor
+@Service
 public class UserService {
 
     private final UserRepository users;

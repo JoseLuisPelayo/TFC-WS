@@ -10,6 +10,5 @@ import lombok.Setter;
 @AllArgsConstructor
 @NoArgsConstructor
 public class JoinPayload {
-    private Double x;
-    private Double y;
+    private String playerName;
 }

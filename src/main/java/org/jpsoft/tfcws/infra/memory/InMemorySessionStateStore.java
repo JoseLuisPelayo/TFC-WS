@@ -1,40 +1,31 @@
 package org.jpsoft.tfcws.infra.memory;
 
 import org.jpsoft.tfcws.app.port.SessionStateStore;
-import org.jpsoft.tfcws.domain.actor.EntityState;
+import org.jpsoft.tfcws.domain.actor.SessionState;
 
-import java.util.HashMap;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 public class InMemorySessionStateStore implements SessionStateStore {
 
-    private final ConcurrentMap<String, EntityState> storeById = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, SessionState> storeBySessionId = new ConcurrentHashMap<>();
 
     @Override
-    public Optional<EntityState> get(String id) {
-        return Optional.ofNullable(storeById.get(id));
+    public void bind(String sessionId, SessionState state) {
+        if (sessionId == null || sessionId.isBlank()) throw new IllegalArgumentException("sessionId");
+        if (state == null) throw new IllegalArgumentException("state");
+        storeBySessionId.put(sessionId, state);
     }
 
     @Override
-    public EntityState upsert(String id, EntityState state) {
-        storeById.put(id, state);
-        return state;
+    public Optional<SessionState> getSessionState(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return Optional.empty();
+        return Optional.ofNullable(storeBySessionId.get(sessionId));
     }
 
     @Override
-    public void remove(String id) {
-        storeById.remove(id);
-    }
-
-    public HashMap<String, EntityState> getAllSessions(Set<String> ids) {
-        HashMap<String, EntityState> result = new HashMap<>();
-        for (String id : ids) {
-            EntityState s = storeById.get(id);
-            if (s != null) result.put(id, s);
-        }
-        return result;
+    public void unbind(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) throw new IllegalArgumentException("sessionId");
+        storeBySessionId.remove(sessionId);
     }
 }

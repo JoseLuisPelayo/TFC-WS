@@ -43,7 +43,7 @@ public class InMemoryPresence implements Presence {
      * Mapa concurrente sessionId -> Position.
      * Contiene la posición actual conocida de cada sesión.
      */
-    private final ConcurrentHashMap<String, Position> positionByPlayer = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Position> positionByPlayer = new ConcurrentHashMap<>();
 
     /**
      * Mapa concurrente zoneKey -> (mapa sessionId -> Position).
@@ -51,7 +51,7 @@ public class InMemoryPresence implements Presence {
      * Cada valor es un ConcurrentHashMap para permitir actualizaciones concurrentes
      * de distintas sesiones dentro de la misma zona.
      */
-    private final ConcurrentHashMap<String, ConcurrentHashMap<String, Position>> playerByChunk = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentHashMap<UUID, Position>> playerByChunk = new ConcurrentHashMap<>();
 
     /**
      * Mapa concurrente sessionId -> ReentrantLock.
@@ -59,7 +59,7 @@ public class InMemoryPresence implements Presence {
      * relativas a esa sesión (upsert/remove). Los locks se eliminan cuando ya no son necesarios
      * para evitar crecimiento indefinido.
      */
-    private final ConcurrentMap<String, ReentrantLock> locksByPlayerId = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, ReentrantLock> locksByPlayerId = new ConcurrentHashMap<>();
 
     /**
      * Inserta o actualiza la posición de una sesión y asegura su presencia en el chunk
@@ -80,8 +80,8 @@ public class InMemoryPresence implements Presence {
      * @throws IllegalArgumentException si {@code playerId} es {@code null} o vacío, o si {@code position} es {@code null}
      */
     @Override
-    public void upsertPresence(String playerId, Position position) {
-        if (playerId == null || playerId.isEmpty()) {
+    public void upsertPresence(UUID playerId, Position position) {
+        if (playerId == null || playerId.toString().isEmpty()) {
             throw new IllegalArgumentException("playerId no puede ser null o vacío");
         }
         if (position == null) {
@@ -100,7 +100,7 @@ public class InMemoryPresence implements Presence {
             }
 
             if (oldChunk != null && !oldChunk.equals(current)) {
-                ConcurrentHashMap<String, Position> playersInChunk = playerByChunk.get(oldChunk.getZoneKey());
+                ConcurrentHashMap<UUID, Position> playersInChunk = playerByChunk.get(oldChunk.getZoneKey());
                 if (playersInChunk != null) {
                     playersInChunk.remove(playerId);
                     if (playersInChunk.isEmpty()) {
@@ -134,8 +134,8 @@ public class InMemoryPresence implements Presence {
      * @throws IllegalArgumentException si {@code playerId} es {@code null} o vacío
      */
     @Override
-    public void removePresence(String playerId) {
-        if (playerId == null || playerId.isEmpty()) {
+    public void removePresence(UUID playerId) {
+        if (playerId == null || playerId.toString().isEmpty()) {
             throw new IllegalArgumentException("playerId no puede ser null o vacío");
         }
 
@@ -150,7 +150,7 @@ public class InMemoryPresence implements Presence {
 
             if (lastPosition != null) {
                 String lastZoneKey = ChunkGeometry.posToChunk(lastPosition).getZoneKey();
-                Map<String, Position> zonePresence = playerByChunk.get(lastZoneKey);
+                Map<UUID, Position> zonePresence = playerByChunk.get(lastZoneKey);
                 if (zonePresence != null) {
                     zonePresence.remove(playerId);
                     if (zonePresence.isEmpty()) {
@@ -165,10 +165,10 @@ public class InMemoryPresence implements Presence {
         locksByPlayerId.remove(playerId, lock);
     }
 
-    public Set<String> getEntitiesInZone(ChunkCoord chunkCoord) {
+    public Set<UUID> getEntitiesInZone(ChunkCoord chunkCoord) {
         if (chunkCoord == null) return Set.of();
 
-        ConcurrentHashMap<String, Position> players = playerByChunk.get(chunkCoord.getZoneKey());
+        ConcurrentHashMap<UUID, Position> players = playerByChunk.get(chunkCoord.getZoneKey());
         if (players == null || players.isEmpty()) {
             return Set.of();
         }
@@ -185,7 +185,7 @@ public class InMemoryPresence implements Presence {
      * @param playerId id de la sesión; no debe ser {@code null}
      * @return lock asociado a {@code playerId}
      */
-    private ReentrantLock lockFor(String playerId) {
+    private ReentrantLock lockFor(UUID playerId) {
         return locksByPlayerId.computeIfAbsent(playerId, id -> new ReentrantLock());
     }
 }

@@ -107,4 +107,3 @@ Chunk (cx, cy)
 
 ### Nota de impresión
 - Orientación **Vertical (A4)**, márgenes **normales**. Imprimir al **100%** (sin “ajustar al área imprimible”).
-

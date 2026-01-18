@@ -5,6 +5,7 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @Getter
 @Setter
@@ -14,9 +15,9 @@ import java.time.Instant;
 @Table(name = "players", schema = "warfarm")
 public class Player {
     @Id
-    private String id;
+    private UUID id;
 
-    private User user;
+    private UUID userId;
 
     private String playerName;
 

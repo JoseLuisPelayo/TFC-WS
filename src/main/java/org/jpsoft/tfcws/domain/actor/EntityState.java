@@ -4,9 +4,10 @@ import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 
 import java.util.Set;
+import java.util.UUID;
 
 public record EntityState(
-        String playerId,
+        UUID playerId,
         Set<ChunkCoord> currentAOIChunks,
         Position currentPosition,
         ChunkCoord currentChunk,

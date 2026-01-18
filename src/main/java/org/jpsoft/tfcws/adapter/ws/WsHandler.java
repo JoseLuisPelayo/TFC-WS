@@ -2,16 +2,15 @@ package org.jpsoft.tfcws.adapter.ws;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.jpsoft.tfcws.app.flow.AuthFlow;
 import org.jpsoft.tfcws.app.flow.OnMoveFlow;
-import org.jpsoft.tfcws.app.port.OutboundHub;
-import org.jpsoft.tfcws.app.port.Presence;
-import org.jpsoft.tfcws.app.port.SessionRegistry;
+import org.jpsoft.tfcws.app.port.*;
 import org.jpsoft.tfcws.app.flow.OnConnectFlow;
 import org.jpsoft.tfcws.adapter.ws.msg.Envelope;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorCode;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorPayload;
 import org.jpsoft.tfcws.adapter.ws.msg.MsgType;
-import org.jpsoft.tfcws.app.port.SessionStateStore;
+import org.jpsoft.tfcws.domain.actor.SessionState;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketMessage;
@@ -21,6 +20,7 @@ import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.UUID;
 
 /**
  * Controlador WebSocket reactivo basado en Spring WebFlux.
@@ -70,6 +70,10 @@ public class WsHandler implements WebSocketHandler {
      */
     private final OnMoveFlow moveFlow;
     /**
+     * Flujo que maneja la autenticación de usuarios.
+     */
+    private final AuthFlow authFlow;
+    /**
      * Hub de salida para enviar mensajes a las sesiones.
      */
     private final OutboundHub outboundHub;
@@ -77,6 +81,7 @@ public class WsHandler implements WebSocketHandler {
      * Codec para parsear y serializar mensajes WebSocket.
      */
     private final MsgCodec codec;
+    private final EntityStateStore entityStateStore;
     private final SessionStateStore sessionStateStore;
 
     /**
@@ -147,9 +152,11 @@ public class WsHandler implements WebSocketHandler {
                         }))
                 .share();
 
+        // Ejecuta la lógica de autenticación.
+        Mono<Void> authWork = authFlow.run(bus, session);
+
         // Ejecuta la lógica de conexión que puede producir un mensaje inicial (o vaciarse).
         Mono<Void> connectWork = connectFlow.run(session, bus);
-
 
         // Ejecuta la lógica de movimiento que produce echos de movimiento.
         Mono<Void> moveWork = moveFlow.run(session, bus);
@@ -165,7 +172,7 @@ public class WsHandler implements WebSocketHandler {
         Flux<WebSocketMessage> outbound = Flux.merge(hubMessages, heartbeat);
 
 //        Mono<Void> processing = Mono.when(moveWork, connectWork);
-        Mono<Void> processing = Mono.whenDelayError(connectWork, moveWork)
+        Mono<Void> processing = Mono.whenDelayError(authWork, connectWork, moveWork)
                 .doOnError(e -> log.error("processing_failed sessionId={}", id, e))
                 .onErrorResume(e -> Mono.empty());
 
@@ -175,11 +182,18 @@ public class WsHandler implements WebSocketHandler {
                 .and(processing)
                 .doFinally(s -> {
 
-                    outboundHub.unregister(id);
-                    presence.removePresence(id);
-                    sessionStateStore.remove(id);
-                    sessionRegistry.removeSession(id);
-
+                    SessionState sessionState = sessionStateStore.getSessionState(id)
+                            .isPresent() ? sessionStateStore.getSessionState(id).get() : null;
+                    if (sessionState != null) {
+                        UUID entityId = sessionState.getPlayerId();
+                        outboundHub.unregister(id);
+                        presence.removePresence(entityId);
+                        entityStateStore.remove(entityId);
+                        sessionStateStore.unbind(id);
+                        sessionRegistry.removeSession(id);
+                    } else {
+                        log.error("session clearing failed, no session state for id={}", id);
+                    }
 
                     log.info("WebSocket session ended: id={}, address={}", id, address);
                 });
