@@ -38,12 +38,12 @@ public class PlayerService {
     }
 
     public Mono<Player> savePosition(UUID playerId, double x, double y) {
-        return players.findById(playerId)
-                .flatMap(p -> {
-                    p.setLastXPosition((float) x);
-                    p.setLastYPosition((float) y);
-                    p.setUpdatedAt(Instant.now());
-                    return players.save(p);
-                });
+        Mono<Player> player = players.findById(playerId);
+        return player.flatMap(p -> {
+            p.setLastXPosition((float) x);
+            p.setLastYPosition((float) y);
+            p.setUpdatedAt(Instant.now());
+            return players.save(p);
+        });
     }
 }

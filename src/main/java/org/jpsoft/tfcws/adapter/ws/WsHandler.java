@@ -4,13 +4,13 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jpsoft.tfcws.app.flow.AuthFlow;
 import org.jpsoft.tfcws.app.flow.OnMoveFlow;
+import org.jpsoft.tfcws.app.lifecyle.SessionCleaner;
 import org.jpsoft.tfcws.app.port.*;
 import org.jpsoft.tfcws.app.flow.OnConnectFlow;
 import org.jpsoft.tfcws.adapter.ws.msg.Envelope;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorCode;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorPayload;
 import org.jpsoft.tfcws.adapter.ws.msg.MsgType;
-import org.jpsoft.tfcws.domain.actor.SessionState;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketMessage;
@@ -20,7 +20,6 @@ import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.util.UUID;
 
 /**
  * Controlador WebSocket reactivo basado en Spring WebFlux.
@@ -48,16 +47,6 @@ import java.util.UUID;
 public class WsHandler implements WebSocketHandler {
 
     /**
-     * Registro de sesiones: se usa para limpiar/gestionar suscripciones y datos asociados
-     * cuando la sesión termina.
-     */
-    private final SessionRegistry sessionRegistry;
-    /**
-     * Gestor de presencia en memoria: puede ser usado por los flujos para actualizar
-     * la presencia de sesiones/jugadores.
-     */
-    private final Presence presence;
-    /**
      * Flujo que se ejecuta al establecer la conexión y que puede producir un mensaje
      * inicial (p. ej. validación, saludo, suscripciones iniciales).
      *
@@ -81,8 +70,7 @@ public class WsHandler implements WebSocketHandler {
      * Codec para parsear y serializar mensajes WebSocket.
      */
     private final MsgCodec codec;
-    private final EntityStateStore entityStateStore;
-    private final SessionStateStore sessionStateStore;
+    private final SessionCleaner sessionCleaner;
 
     /**
      * Maneja una conexión WebSocket.
@@ -171,32 +159,18 @@ public class WsHandler implements WebSocketHandler {
         // Outbound: concatenamos el mensaje de conexión inicial, los echos y los pings de heartbeat.
         Flux<WebSocketMessage> outbound = Flux.merge(hubMessages, heartbeat);
 
-//        Mono<Void> processing = Mono.when(moveWork, connectWork);
+        Mono<Void> send = session.send(outbound);
         Mono<Void> processing = Mono.whenDelayError(authWork, connectWork, moveWork)
-                .doOnError(e -> log.error("processing_failed sessionId={}", id, e))
                 .onErrorResume(e -> Mono.empty());
 
-        // Envía el outbound y espera la finalización del inbound.
-        // En doFinally se realiza la limpieza del registro de sesiones y el log.
-        return session.send(outbound)
-                .and(processing)
-                .doFinally(s -> {
+        Mono<Void> main = send.and(processing);
 
-                    SessionState sessionState = sessionStateStore.getSessionState(id)
-                            .isPresent() ? sessionStateStore.getSessionState(id).get() : null;
-                    if (sessionState != null) {
-                        UUID entityId = sessionState.getPlayerId();
-                        outboundHub.unregister(id);
-                        presence.removePresence(entityId);
-                        entityStateStore.remove(entityId);
-                        sessionStateStore.unbind(id);
-                        sessionRegistry.removeSession(id);
-                    } else {
-                        log.error("session clearing failed, no session state for id={}", id);
-                    }
-
-                    log.info("WebSocket session ended: id={}, address={}", id, address);
-                });
-
+        return Mono.usingWhen(
+                Mono.just(id),
+                _id -> main,
+                sessionCleaner::clean,
+                (_id, err) -> sessionCleaner.clean(_id),
+                sessionCleaner::clean
+        ).doFinally(sig -> log.info("WebSocket session ended: id={}, address={}", id, address));
     }
 }
