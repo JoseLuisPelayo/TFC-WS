@@ -4,6 +4,7 @@ import org.jpsoft.tfcws.app.port.SessionStateStore;
 import org.jpsoft.tfcws.domain.actor.SessionState;
 
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class InMemorySessionStateStore implements SessionStateStore {
@@ -21,6 +22,11 @@ public class InMemorySessionStateStore implements SessionStateStore {
     public Optional<SessionState> getSessionState(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) return Optional.empty();
         return Optional.ofNullable(storeBySessionId.get(sessionId));
+    }
+
+    @Override
+    public Set<SessionState> getAllSessionStates() {
+        return Set.copyOf(storeBySessionId.values());
     }
 
     @Override
