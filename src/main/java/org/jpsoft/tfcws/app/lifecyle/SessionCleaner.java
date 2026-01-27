@@ -2,17 +2,22 @@ package org.jpsoft.tfcws.app.lifecyle;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.jpsoft.tfcws.adapter.ws.msg.DespawnPlayerPayload;
+import org.jpsoft.tfcws.adapter.ws.msg.MsgType;
 import org.jpsoft.tfcws.app.port.*;
 import org.jpsoft.tfcws.app.service.PlayerService;
 import org.jpsoft.tfcws.domain.actor.EntityState;
 import org.jpsoft.tfcws.domain.actor.SessionState;
 import org.jpsoft.tfcws.domain.spatial.Position;
+import org.jpsoft.tfcws.domain.world.ChunkCoord;
 import org.jpsoft.tfcws.infra.repository.ticker.PositionTicker;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -26,6 +31,7 @@ public class SessionCleaner {
     private final SessionRegistry sessionRegistry;
     private final PlayerService playerService;
     private final PositionTicker positionTicker;
+    private final WsMessenger wsMessenger;
 
     public Mono<Void> clean(String sessionId) {
 
@@ -43,6 +49,22 @@ public class SessionCleaner {
 
         SessionState ss = optSessionState.get();
         UUID playerId = ss.getPlayerId();
+        Optional<EntityState> optPlayerState = entityStateStore.get(playerId);
+
+        if (optPlayerState.isPresent()) {
+            Set<ChunkCoord> zones = optPlayerState.get().currentAOIChunks();
+
+            Set<String> watchers = zones.stream()
+                    .flatMap(zone -> sessionRegistry.getSessionsByZone(zone).stream())
+                    .filter(w -> !w.equals(sessionId))
+                    .collect(Collectors.toSet());
+
+            if (!watchers.isEmpty()) {
+                watchers.forEach(watcherSession ->
+                        wsMessenger.sendTo(watcherSession, MsgType.DESPAWN_ENTITIES, new DespawnPlayerPayload(Set.of()))
+                );
+            }
+        }
 
         Mono<Void> persistIfPossible = Mono.defer(() -> {
             if (playerId == null) return Mono.empty();
