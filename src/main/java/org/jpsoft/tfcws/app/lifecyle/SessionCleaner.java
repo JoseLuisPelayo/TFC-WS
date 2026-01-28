@@ -61,7 +61,7 @@ public class SessionCleaner {
 
             if (!watchers.isEmpty()) {
                 watchers.forEach(watcherSession ->
-                        wsMessenger.sendTo(watcherSession, MsgType.DESPAWN_ENTITIES, new DespawnPlayerPayload(Set.of()))
+                        wsMessenger.sendTo(watcherSession, MsgType.DESPAWN_ENTITIES, new DespawnPlayerPayload(Set.of(playerId)))
                 );
             }
         }
