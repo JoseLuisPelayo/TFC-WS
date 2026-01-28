@@ -1,4 +1,4 @@
-package org.jpsoft.tfcws.app;
+package org.jpsoft.tfcws.app.lifecyle;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;

@@ -2,16 +2,15 @@ package org.jpsoft.tfcws.adapter.ws;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.jpsoft.tfcws.app.flow.AuthFlow;
 import org.jpsoft.tfcws.app.flow.OnMoveFlow;
-import org.jpsoft.tfcws.app.port.OutboundHub;
-import org.jpsoft.tfcws.app.port.Presence;
-import org.jpsoft.tfcws.app.port.SessionRegistry;
+import org.jpsoft.tfcws.app.lifecyle.SessionCleaner;
+import org.jpsoft.tfcws.app.port.*;
 import org.jpsoft.tfcws.app.flow.OnConnectFlow;
 import org.jpsoft.tfcws.adapter.ws.msg.Envelope;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorCode;
 import org.jpsoft.tfcws.adapter.ws.msg.error.ErrorPayload;
 import org.jpsoft.tfcws.adapter.ws.msg.MsgType;
-import org.jpsoft.tfcws.app.port.SessionStateStore;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketMessage;
@@ -48,16 +47,6 @@ import java.time.Duration;
 public class WsHandler implements WebSocketHandler {
 
     /**
-     * Registro de sesiones: se usa para limpiar/gestionar suscripciones y datos asociados
-     * cuando la sesión termina.
-     */
-    private final SessionRegistry sessionRegistry;
-    /**
-     * Gestor de presencia en memoria: puede ser usado por los flujos para actualizar
-     * la presencia de sesiones/jugadores.
-     */
-    private final Presence presence;
-    /**
      * Flujo que se ejecuta al establecer la conexión y que puede producir un mensaje
      * inicial (p. ej. validación, saludo, suscripciones iniciales).
      *
@@ -70,6 +59,10 @@ public class WsHandler implements WebSocketHandler {
      */
     private final OnMoveFlow moveFlow;
     /**
+     * Flujo que maneja la autenticación de usuarios.
+     */
+    private final AuthFlow authFlow;
+    /**
      * Hub de salida para enviar mensajes a las sesiones.
      */
     private final OutboundHub outboundHub;
@@ -77,7 +70,7 @@ public class WsHandler implements WebSocketHandler {
      * Codec para parsear y serializar mensajes WebSocket.
      */
     private final MsgCodec codec;
-    private final SessionStateStore sessionStateStore;
+    private final SessionCleaner sessionCleaner;
 
     /**
      * Maneja una conexión WebSocket.
@@ -147,9 +140,11 @@ public class WsHandler implements WebSocketHandler {
                         }))
                 .share();
 
+        // Ejecuta la lógica de autenticación.
+        Mono<Void> authWork = authFlow.run(bus, session);
+
         // Ejecuta la lógica de conexión que puede producir un mensaje inicial (o vaciarse).
         Mono<Void> connectWork = connectFlow.run(session, bus);
-
 
         // Ejecuta la lógica de movimiento que produce echos de movimiento.
         Mono<Void> moveWork = moveFlow.run(session, bus);
@@ -164,25 +159,18 @@ public class WsHandler implements WebSocketHandler {
         // Outbound: concatenamos el mensaje de conexión inicial, los echos y los pings de heartbeat.
         Flux<WebSocketMessage> outbound = Flux.merge(hubMessages, heartbeat);
 
-//        Mono<Void> processing = Mono.when(moveWork, connectWork);
-        Mono<Void> processing = Mono.whenDelayError(connectWork, moveWork)
-                .doOnError(e -> log.error("processing_failed sessionId={}", id, e))
+        Mono<Void> send = session.send(outbound);
+        Mono<Void> processing = Mono.whenDelayError(authWork, connectWork, moveWork)
                 .onErrorResume(e -> Mono.empty());
 
-        // Envía el outbound y espera la finalización del inbound.
-        // En doFinally se realiza la limpieza del registro de sesiones y el log.
-        return session.send(outbound)
-                .and(processing)
-                .doFinally(s -> {
+        Mono<Void> main = send.and(processing);
 
-                    outboundHub.unregister(id);
-                    presence.removePresence(id);
-                    sessionStateStore.remove(id);
-                    sessionRegistry.removeSession(id);
-
-
-                    log.info("WebSocket session ended: id={}, address={}", id, address);
-                });
-
+        return Mono.usingWhen(
+                Mono.just(id),
+                _id -> main,
+                sessionCleaner::clean,
+                (_id, err) -> sessionCleaner.clean(_id),
+                sessionCleaner::clean
+        ).doFinally(sig -> log.info("WebSocket session ended: id={}, address={}", id, address));
     }
 }

@@ -1,16 +1,10 @@
 services:
 
-  tfc_db:
+  db:
     image: postgres:17.5
     restart: always
-    # set shared memory limit when using docker compose
     shm_size: 128mb
-    # or set shared memory limit when deploy via swarm stack
-    #volumes:
-    #  - type: tmpfs
-    #    target: /dev/shm
-    #    tmpfs:
-    #      size: 134217728 # 128*2^20 bytes = 128Mb
+
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD} #superuser pass
 
@@ -19,67 +13,33 @@ services:
       POSTGRES_DB: ${POSTGRES_DB} #default database name
 
       POSTGRES_HOST_AUTH_METHOD: scram-sha-256
-      # Deberia de venir por defecto en versiones modernas de postgre
-      # es muy necesario para que no puedan capturar nuestra contraseña
-      # debemos evitar siempre dejarlo en modo trust ya ue es muy inseguro
-      # y ni siquiera comprobara la contraseña para conectarse a la db
 
       POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=es_ES --encoding=UTF8 --data-checksums --auth-host=scram-sha-256"
-      #configuraciones de la base de datos solo tendran efecto si es la primera vez que la creas
-
-      #PGDATA: /var/lib/postgresql/data/pgdata
-      # Esta se usa si quieres si quieres personalizar la ruta interna
-      # Donde se gurdan los archivos
-
-      # POSTGRES_INITDB_WALDIR: /pgwall Esto es donde se guardan todos los cambios
-      # echos en la base de datos, es importante setearlo en prod para ecuperación en
-      # caso de fallos, consistencia o crear replicas en otro servidor
 
     command: postgres -c listen_addresses='*'
-    # para que hacepte conexiones desde otros contenedores, luego configuraremos
-    # la red para que solo sean conexiones internas desde la misma red
 
 
     volumes:
       - pgdata:/var/lib/postgresql/data
 
       - ./pg_db/init-pg:/docker-entrypoint-initdb.d:ro
-      # esto copiara el directorio init-db dentro del directorio docker-entrypoint-initdb.d y se ejecutara
-      # automaticamente cuando crees la base de datos por primera vez, :ro quiere decir read only
-      # es por seguridad
 
-    networks:
-      - warfarm # sera la red por la que se comuniquen los contenedores
-      # solo expongo los puertos para desarrollo ya que estan en la misma red cuando
-      # los oculte para produccion me podre conectar desde
-      # adminer y el resto de contenedores de la red pero no desde afuera
+
     ports:
-      - "5433:5432" # quitar en produccion para no poder conectar desde fuera de la red
+      - "5434:5432"
 
 
-  adminer:
-    image: adminer
-    restart: always
-    environment:
-      ADMINER_DEFAULT_SERVER: ps_db
-    networks:
-      - warfarm
+  app:
+    build: .
+    container_name: tfcws-app
+    depends_on:
+      - db
     ports:
-      - "8081:8080"
+      - "8080:8080"
+    env_file:
+      - .env
 
 
 volumes:
   pgdata: {}
-
-networks:
-  warfarm:
-    driver: bridge
-
-
-#TODO
-# - en produccion definir un volumen de datos externo
-# - crear un plan de backups periódicos
-# - limpiar antes de compartir
-# - Ocultar puertos para prod
-# - cambiar adminer por pgadmin?
 

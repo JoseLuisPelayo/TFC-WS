@@ -1,6 +1,8 @@
 package org.jpsoft.tfcws.adapter.ws.msg;
 
 public enum MsgType {
+    AUTH,
+    AUTH_OK,
     JOIN,
     INITIAL_STATE,
     SUBSCRIBED,

@@ -4,6 +4,7 @@ import org.jpsoft.tfcws.domain.spatial.Position;
 import org.jpsoft.tfcws.domain.world.ChunkCoord;
 
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -42,7 +43,7 @@ public interface Presence {
      * @param position  posición actual de la sesión; no puede ser {@code null}
      * @throws IllegalArgumentException si {@code sessionId} o {@code position} son {@code null} o inválidos
      */
-    void upsertPresence(String sessionId, Position position);
+    void upsertPresence(UUID playerId, Position position);
 
     /**
      * Elimina la presencia asociada a la sesión indicada.
@@ -53,8 +54,8 @@ public interface Presence {
      * @param sessionId identificador único de la sesión; no puede ser {@code null} ni vacío
      * @throws IllegalArgumentException si {@code sessionId} es {@code null} o inválido
      */
-    void removePresence(String sessionId);
+    void removePresence(UUID playerId);
 
     // Devuelve un conjunto con los IDs de las entidades presentes en la zona indicada
-    Set<String> getEntitiesInZone(ChunkCoord chunkCoord);
+    Set<UUID> getEntitiesInZone(ChunkCoord chunkCoord);
 }
